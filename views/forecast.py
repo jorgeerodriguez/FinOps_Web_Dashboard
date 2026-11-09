@@ -2,10 +2,11 @@ import pandas as pd
 import streamlit as st
 from finops.forecast import forecast_two_years
 from finops.provider_page import fc_chart
-from finops.ui import annual_budget, cfg, get_data, money, pct, show, sidebar_filters
+from finops.ui import annual_budget, cfg, get_data, money, pct, require_data, show, sidebar_filters
 
 st.title("Forecast & Budget")
 df = sidebar_filters(get_data())
+require_data(df)
 last = df["date"].max()
 yr = last.year
 fcfg = cfg()["forecast"]

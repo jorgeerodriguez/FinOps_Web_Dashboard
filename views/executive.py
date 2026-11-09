@@ -3,11 +3,12 @@ from finops import asnow
 from finops import exec_summary as es
 from finops.exec_charts import cumulative_block
 from finops.exec_report import build_report, save_report
-from finops.ui import get_data, money, show, sidebar_filters
+from finops.ui import get_data, money, require_data, show, sidebar_filters
 
 st.title("Executive Summary")
 st.sidebar.caption("Spend category is chosen in the sidebar; budgets apply to Cloud Services only.")
 df = sidebar_filters(get_data())
+require_data(df)
 k = es.compute(df)
 
 st.caption(f"Billed data through **{k.last:%B %Y}** · fiscal year Jan–Dec")

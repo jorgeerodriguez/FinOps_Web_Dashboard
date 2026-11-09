@@ -81,6 +81,14 @@ def sidebar_filters(df: pd.DataFrame, providers: bool = True) -> pd.DataFrame:
     return df
 
 
+def require_data(df: pd.DataFrame, what: str = "billing data") -> None:
+    """Friendly first-run screen instead of a traceback when the store is empty (or a filter leaves nothing)."""
+    if df is None or df.empty:
+        st.info(f"No {what} yet. Open **Data Health** and click **Refresh AWS** / **Refresh GCP** "
+                "(your own credentials), then come back.")
+        st.stop()
+
+
 def cfg() -> dict:
     return load_config()
 

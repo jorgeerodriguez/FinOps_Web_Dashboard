@@ -2,10 +2,11 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from finops.data import monthly
-from finops.ui import COLORS, TEMPLATE, get_data, money, pct, show
+from finops.ui import COLORS, TEMPLATE, get_data, money, pct, require_data, show
 
 st.title("AWS vs GCP")
 df = get_data()
+require_data(df)
 m = monthly(df, ["provider"])
 # only compare months present in BOTH providers
 common = set(m[m.provider == "AWS"].date) & set(m[m.provider == "GCP"].date)
