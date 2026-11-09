@@ -1,0 +1,11 @@
+streamlit>=1.40
+pandas
+numpy
+plotly
+pyarrow
+statsmodels
+python-dateutil
+# refresh (ingest) only -- each user runs these with their OWN credentials
+boto3
+google-cloud-bigquery
+db-dtypes

@@ -1,0 +1,49 @@
+# FinOps Web Dashboard configuration TEMPLATE.
+# Copy to config.toml (git-ignored) and fill in YOUR values. Paths are relative to this file.
+
+[fiscal]
+start_month = 1            # January -> calendar year (Jan-Dec)
+
+# Monthly budget per provider (USD) on CLOUD SERVICES only (Marketplace / Tax excluded). Annual = 12 x monthly.
+[budget.2026]
+aws_monthly = 0   # set your monthly Cloud Services budget
+gcp_monthly = 0   # set your monthly Cloud Services budget
+
+[budget.2027]
+aws_monthly = 0   # TBD
+gcp_monthly = 0   # TBD
+
+[forecast]
+yoy_window_months = 6      # trailing months used to measure YoY growth
+default_growth_pct = 0.0   # extra adjustment on top of baseline for next-year budget
+default_band_pct = 15      # +/- band when history is too short to backtest
+adjustments_csv = "data/anomaly_rules.csv"   # reviewed billing gaps: add_back | confirmed_real | pending (see page: Data anomalies)
+
+# Next Year Forecast: use only months from this one onward to measure the TREND (skips a one-time launch ramp).
+# The level (exit run-rate) always uses the latest months. Leave a provider out to use all 12 months. Revisit as history grows.
+[forecast.trend_since]
+# GCP = "2026-03"         # example: measure the GCP trend only from this month (skips a launch ramp)
+
+[data]
+dir = "data"               # billing.parquet, refresh_log.csv, owners_*.csv
+history_months = 14        # how far back a refresh pulls (Cost Explorer keeps ~14 by default)
+
+[aws]
+sso_start_url = "https://d-xxxxxxxxxx.awsapps.com/start"   # your IAM Identity Center start URL
+sso_region = "us-east-1"
+rollup_account_id = "111111111111"      # management / payer account Cost Explorer reads from
+
+[gcp]
+project = "your-billing-project"
+table = "your-billing-project.your_dataset.gcp_billing_export_v1_XXXXXX_XXXXXX_XXXXXX"
+
+[owners]
+aws_csv = "data/owners_aws.csv"    # account_id, account_name, family, environment, owner, department
+gcp_csv = "data/owners_gcp.csv"    # project, family, environment, owner, department
+
+[audit]
+dir = "data/audits"
+gcp_names = "data/orphans_gcp.txt"   # project names or IDs (one per line) for the GCP deep audit
+idle_below_usd = 1                  # avg monthly spend below this counts as "no spend"
+# Audit notes that start with any of these are not shown (expected for your role). Everything else is shown once, at the top.
+hide_notes = ["IAM Identity Center not readable"]

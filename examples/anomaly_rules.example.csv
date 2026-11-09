@@ -1,0 +1,3 @@
+provider,account,service,months,action,note
+AWS,Example-Prod,Amazon Relational Database Service,2026-02;2026-03,add_back,"Reserved-capacity fee not billed (billing timing) - confirmed by Jane Doe 2026-11-09"
+GCP,prj-example-prod,BigQuery,2026-01,confirmed_real,"Project launched in January - real, no adjustment"

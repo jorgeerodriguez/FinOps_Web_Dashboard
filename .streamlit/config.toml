@@ -1,0 +1,11 @@
+# Follows the viewer's system setting (Settings menu: Use system setting / Light / Dark).
+# Dark is assumed whenever the theme cannot be detected (see finops/ui.py: theme_type()).
+[theme.light]
+primaryColor = "#2563EB"
+
+[theme.dark]
+primaryColor = "#60A5FA"
+
+[server]
+headless = true
+port = 8502

@@ -1,0 +1,14 @@
+# ---- NEVER commit: real billing data, reports, audits, owner files, environment-specific config
+data/
+reports/
+/config.toml
+.streamlit/secrets.toml
+.env
+
+# ---- python / OS / editor
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+*.log
+*.pid
