@@ -1,11 +1,14 @@
-streamlit>=1.40
-pandas
-numpy
-plotly
-pyarrow
-statsmodels
-python-dateutil
+# Compatible ranges: the MAJOR versions this dashboard is tested on (Python 3.14). requirements.lock has the exact versions.
+# Why the caps matter: style_fig() round-trips Plotly's JSON, the pandas 3 series changed groupby / copy-on-write behaviour,
+# and the forecasting uses statsmodels' Holt-Winters. Raise a cap only after `pytest` passes on the new major.
+streamlit>=1.50,<2
+pandas>=3.0,<4
+numpy>=2.0,<3
+plotly>=7.0,<8
+pyarrow>=20
+statsmodels>=0.15,<0.17
+python-dateutil>=2.9,<3
 # refresh (ingest) only -- each user runs these with their OWN credentials
-boto3
-google-cloud-bigquery
-db-dtypes
+boto3>=1.40,<2
+google-cloud-bigquery>=3.30,<4
+db-dtypes>=1.4,<2

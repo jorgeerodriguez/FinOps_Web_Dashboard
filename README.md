@@ -145,6 +145,19 @@ Calls your role cannot make are noted on the page and skipped; statuses fall bac
 - Hosting it for others? Add authentication in front (SSO reverse proxy or Streamlit's OIDC) and decide who may trigger a refresh —
   a refresh uses the credentials of whoever runs the server process.
 
+## Tests and dependencies
+
+```bash
+pip install -r requirements-dev.txt     # app + pytest
+python -m pytest                        # ~7 s: unit tests of the calculation layer + a smoke test of every page and report
+```
+
+- Tests run on **synthetic data only** (`tests/synth.py`), through `FINOPS_CONFIG`, so they never read your `config.toml` or `data/`.
+  They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the month-to-date
+  projection, the store, every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
+- `requirements.txt` holds compatible ranges (the major versions tested); `requirements.lock` holds the exact versions
+  (`pip install -r requirements.lock` for a reproducible install). Raise a cap only after the tests pass on the new major.
+
 ## Known limitations
 
 - History is whatever the sources keep: ~27 months here (AWS needs multi-year monthly data enabled for more than ~14). Year-over-year comparisons cover the months present in both years.
