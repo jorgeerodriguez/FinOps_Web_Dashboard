@@ -5,6 +5,7 @@ st.set_page_config(page_title="FinOps Dashboard", page_icon="💲", layout="wide
 pages = {
     "Overview": [
         st.Page("views/executive.py", title="Executive Summary", icon="📊", default=True),
+        st.Page("views/history.py", title="Two-Year History", icon="🕰️"),
         st.Page("views/as_now.py", title="Month to Date", icon="⏱️"),
         st.Page("views/compare.py", title="AWS vs GCP", icon="⚖️"),
         st.Page("views/relationships.py", title="Relationships", icon="🕸️"),

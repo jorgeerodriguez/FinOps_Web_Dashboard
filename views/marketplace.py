@@ -5,8 +5,8 @@ from finops.ui import get_data, show
 
 st.title("Marketplace & Third-Party Contracts")
 st.caption("Marketplace is lumpy (annual / quarterly commitments), so it's planned as a **renewal calendar**: each "
-           "contract's cadence is read from its last 12 billed months and repeated forward. Not part of the "
-           "Cloud Services budget.")
+           "contract's cadence is read from its last 12 billed months and repeated forward; the 12 months before "
+           "show whether each contract's price moved at renewal. Not part of the Cloud Services budget.")
 
 allc = get_data(apply_view=False)
 provs = st.sidebar.multiselect("Provider", ["AWS", "GCP"], default=["AWS", "GCP"])
@@ -17,7 +17,10 @@ if mkt.empty:
 
 group = st.sidebar.radio("Rows by", ["Vendor", "Contract"])
 topn = st.sidebar.slider("Max rows in calendar", 10, 60, 30)
-d = mv.assemble(mkt, group, topn)
+nmonths = mkt.date.nunique()
+hist = st.sidebar.slider("Billed months shown", 6, max(nmonths, 7), min(15, max(nmonths, 7)),
+                         help="How many past months the calendar and cash view draw. Totals and the 12-vs-12 contract comparison always use everything loaded.")
+d = mv.assemble(mkt, group, topn, hist)
 yr = d["yr"]
 
 cols = st.columns(5)

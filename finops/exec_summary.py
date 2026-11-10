@@ -126,7 +126,7 @@ def separate_table(allc: pd.DataFrame, k: Kpis) -> pd.DataFrame:
         d = allc[allc["category"] == cat]
         rows.append({"Category": cat, f"{k.last:%b %Y}": money(d.loc[d.date == k.last, "cost_net"].sum()),
                      f"YTD {k.yr}": money(d.loc[d.date.dt.year == k.yr, "cost_net"].sum()),
-                     f"{allc.date.min():%b %Y} – Dec {k.yr - 1} (partial)": money(d.loc[d.date.dt.year == k.yr - 1, "cost_net"].sum())})
+                     (f"FY{k.yr - 1}" if allc.date.min() <= pd.Timestamp(k.yr - 1, 1, 1) else f"{allc.date.min():%b %Y} – Dec {k.yr - 1} (partial)"): money(d.loc[d.date.dt.year == k.yr - 1, "cost_net"].sum())})
     return pd.DataFrame(rows)
 
 

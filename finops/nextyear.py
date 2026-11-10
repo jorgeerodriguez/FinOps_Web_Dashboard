@@ -7,7 +7,8 @@ Method (kept simple enough to explain to Finance):
   Per account / project: each line competes Flat / Damped / Linear / Holt(ETS) on a backtest; simplest model within
   5% of the best MAE wins; forecasts are capped (2x) and floored (0.5x) vs the exit run-rate.
   Marketplace: contract renewal calendar (see finops/marketplace.py).
-Basis = the last 12 billed months (the reports use calendar 2026; the dashboard holds ~14 months of history).
+Basis = the last 12 billed months. Earlier months (the dashboard holds ~2 years) are drawn as context and used by the look-back test
+(finops/history.py: lookback), not by the model itself.
 """
 from __future__ import annotations
 import warnings
@@ -142,6 +143,7 @@ class NextYear:
     basis: pd.DatetimeIndex
     horizon: pd.DatetimeIndex
     svc_actual: dict = field(default_factory=dict)      # provider -> Series (basis months)
+    hist: dict = field(default_factory=dict)            # provider -> Series of ALL billed Cloud Services months (context: earlier than the basis)
     svc: dict = field(default_factory=dict)             # provider -> DataFrame[Low, Base, High] over horizon
     params: dict = field(default_factory=dict)
     normalization: dict = field(default_factory=dict)
@@ -218,6 +220,7 @@ def build(df: pd.DataFrame, top_n: int = 12, apply_adjustments: bool = True) -> 
         gap = (typical - sp).where(sp < 0.5 * typical, 0.0) if typical else pd.Series(0.0, index=basis)
         ny.normalization[p] = gap[gap > 0]
         ny.svc_actual[p] = s
+        ny.hist[p] = df[(df["category"] == CLOUD) & (df["provider"] == p)].groupby("date")["cost_net"].sum().sort_index()
         rg = sum((g for r, g in rule_lines if r.provider == p), pd.Series(0.0, index=basis))
         ny.rule_gaps[p] = rg
         since = pd.Timestamp(since_cfg[p] + "-01") if since_cfg.get(p) else None

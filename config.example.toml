@@ -26,7 +26,7 @@ adjustments_csv = "data/anomaly_rules.csv"   # reviewed billing gaps: add_back |
 
 [data]
 dir = "data"               # billing.parquet, refresh_log.csv, owners_*.csv
-history_months = 14        # how far back a refresh pulls (Cost Explorer keeps ~14 by default)
+history_months = 27        # refresh pulls this many months (Cost Explorer needs "multi-year data at monthly granularity" enabled for >14)
 
 [aws]
 sso_start_url = "https://d-xxxxxxxxxx.awsapps.com/start"   # your IAM Identity Center start URL

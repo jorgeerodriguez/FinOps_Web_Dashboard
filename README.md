@@ -12,20 +12,21 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 
 | Page | What it answers |
 |---|---|
-| **Executive Summary** | KPIs, monthly spend vs budget, cumulative spend vs budget, where the money goes (service / account / project) with year-over-year on overlapping months, Marketplace & Tax reported separately |
+| **Executive Summary** | KPIs, monthly spend vs budget, cumulative spend vs budget, where the money goes (service / account / project) with last year's cumulative line and year-over-year on matching months, Marketplace & Tax reported separately |
+| **Two-Year History** | Latest 12 months vs the 12 before, same month year over year, annual run-rate, what explains the change (by service / account / project), one-off months with their driver, Marketplace & Tax separately, and a look-back test of the forecast method |
 | **Month to Date** | In-progress month (as-now): projected month-end vs budget, lumps handled line by line, Marketplace charges still scheduled |
 | **AWS / GCP** | Total, by account/project, by service, owner or family; per-entity forecast and billing detail |
 | **AWS vs GCP** | Trend, share and annual totals on comparable months |
 | **Forecast & Budget** | Current-year and next-year forecasts with a what-if adjustment |
-| **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review |
-| **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, renewal watch |
+| **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review, look-back of last year's forecast |
+| **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, price change vs the prior 12 months, renewal watch |
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
-| **Insights & Savings** | Spikes, new spend, creeping growth, ownership gaps, cost-structure checks |
+| **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded), **owner scorecard** with a per-owner review, plus spikes, new spend, creeping growth, ownership gaps and cost-structure checks |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
 | **Data Health** | Refresh buttons (your credentials), refresh history, data gaps |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
-print to PDF from any browser (Executive Summary, Next Year Forecast, Marketplace calendar).
+print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar).
 
 ## Design principles
 
@@ -66,7 +67,7 @@ python -m ingest.run --provider aws [--profile NAME]
 gcloud auth application-default login
 python -m ingest.run --provider gcp
 
-python -m ingest.run --provider all      # both; default window = 14 months incl. the in-progress month
+python -m ingest.run --provider all      # both; default window = `history_months` (27) incl. the in-progress month
 ```
 
 ## Data and configuration
@@ -77,7 +78,7 @@ python -m ingest.run --provider all      # both; default window = 14 months incl
 |---|---|
 | `[budget.<year>]` | Monthly Cloud Services budget per provider (`aws_monthly`, `gcp_monthly`) |
 | `[forecast]` | YoY window, default band, `adjustments_csv`; `[forecast.trend_since]` to measure a provider's trend from a given month (skips a launch ramp) |
-| `[data]` | Data folder and refresh window (`history_months`, 14 by default — Cost Explorer's default retention) |
+| `[data]` | Data folder and refresh window (`history_months`, 27 by default = two full years plus the current one. AWS Cost Explorer keeps only ~14 months unless *multi-year data at monthly granularity* is enabled in Cost Management preferences; GCP goes back as far as the billing export was on) |
 | `[aws]`, `[gcp]` | SSO start URL, payer (management) account, GCP billing project and BigQuery export table |
 | `[owners]` | Paths to `owners_aws.csv` / `owners_gcp.csv` |
 | `[audit]` | Audit folder, GCP project list, idle threshold, notes to hide |
@@ -103,6 +104,8 @@ finops/
   forecast.py                              current-year forecast (YoY ratio / run-rate, backtested)
   nextyear.py nextyear_summary.py          next-year Low/Base/High, per-line model competition, anomaly rules
   marketplace.py marketplace_view.py       contract cadence -> renewal calendar
+  history.py history_report.py             two-year comparison, one-off detection, forecast look-back, 'what moved' summary
+  savings.py                               savings ledger, erosion, owner scorecard
   asnow.py                                 month-to-date projection
   audit.py insights.py                     orphan screening, savings signals
   exec_summary.py exec_charts.py ...       numbers/figures with NO Streamlit in them
@@ -119,7 +122,7 @@ HTML report cannot disagree.
 Per provider: start at the exit run-rate (last 3 billed months) and add a Theil-Sen trend measured over the last 12 billed months.
 *Low* = flat, *Base* = damped trend (15% momentum loss per month), *High* = trend continues. Each account/project also competes
 Flat / Damped / Linear / Holt-ETS on a backtest (capped at 2×, floored at 0.5× of the exit run-rate). Marketplace is a contract calendar,
-not a trend. With only ~14 months of history, seasonality is not modelled — treat ranges accordingly.
+not a trend. The model uses the latest 12 months; the earlier history is context and powers a look-back test (the method re-run as of 12 months ago, compared with what was billed). Seasonality is still not modelled — two years cannot separate it from growth.
 
 ### Month to Date
 The in-progress month is stored as `is_partial` and never enters billed views, forecasts or reports. Its projection is line-by-line:
@@ -144,7 +147,7 @@ Calls your role cannot make are noted on the page and skipped; statuses fall bac
 
 ## Known limitations
 
-- ~14 months of history (Cost Explorer's default); year-over-year comparisons cover only overlapping months.
+- History is whatever the sources keep: ~27 months here (AWS needs multi-year monthly data enabled for more than ~14). Year-over-year comparisons cover the months present in both years.
 - Month-to-date is monthly-grain (no daily burn chart yet); early-month projections are low confidence.
 - AWS deep audit depends on Organizations / IAM trusted-access permissions; it degrades gracefully when denied.
 - Excel can turn 12-digit account IDs into scientific notation when editing the owner CSVs. Matching also uses account names, so this
@@ -152,5 +155,4 @@ Calls your role cannot make are noted on the page and skipped; statuses fall bac
 
 ## Roadmap
 
-Daily-grain as-now data (burn chart), savings-opportunity detectors (idle resources, commitment coverage), authentication for shared hosting,
-and a scheduled monthly report.
+Daily-grain as-now data (burn chart), opportunity detectors from the 12-month trends (steady always-on spend as commitment candidates, non-prod that is not shrinking, GCP credits ending), a printable review pack per owner, idle-resource signals (needs usage data such as AWS Compute Optimizer or GCP Recommender), authentication for shared hosting, and a scheduled monthly report.

@@ -59,7 +59,8 @@ def entity_block(d: pd.DataFrame, provider: str, level: str, noun: str, topn: in
     ytd_total = cur.cost_net.sum()
     ytd_by = cur.groupby("ent").cost_net.sum()
     ov = overlap_months(d, yr)
-    ov_names = ", ".join(pd.Timestamp(yr, m, 1).strftime("%b") for m in ov)
+    _mn = lambda m: pd.Timestamp(yr, m, 1).strftime("%b")
+    ov_names = (f"{_mn(ov[0])}–{_mn(ov[-1])}" if len(ov) > 2 and ov == list(range(ov[0], ov[-1] + 1)) else ", ".join(_mn(m) for m in ov))
 
     # ---- takeaway line -------------------------------------------------------------------
     top3 = ytd_by.reindex(top[:3]).sum()
@@ -94,6 +95,10 @@ def entity_block(d: pd.DataFrame, provider: str, level: str, noun: str, topn: in
         if b:
             fig.add_scatter(x=cum.index.strftime("%b"), y=[b / 12 * (i + 1) for i in range(len(cum))], mode="lines",
                             name=f"{provider} budget (cumulative)", line=dict(color="#dc2626", dash="dash", width=2))
+        prior = (d[d.date.dt.year == yr - 1].groupby(d.date.dt.month).cost_net.sum().reindex(range(1, len(cum) + 1)))
+        if prior.notna().all() and prior.sum() > 0:           # same months last year, so the two cumulative lines are comparable
+            fig.add_scatter(x=cum.index.strftime("%b"), y=prior.cumsum().values, mode="lines", name=f"{yr - 1} total (cumulative)",
+                            line=dict(color="#475569", dash="dot", width=2.5), hovertemplate=f"{yr - 1} cumulative: $%{{y:,.0f}}<extra></extra>")
         fig.add_scatter(x=cum.index.strftime("%b"), y=cum.sum(axis=1), mode="lines+markers+text", name="Total",
                         line=dict(color="#0f172a", width=2), text=[""] * (len(cum) - 1) + [money(cum.sum(axis=1).iloc[-1])],
                         textposition="top left", showlegend=False)
@@ -117,7 +122,7 @@ def entity_block(d: pd.DataFrame, provider: str, level: str, noun: str, topn: in
             fig2.add_scatter(x=y["prev"], y=labels, mode="markers", name=f"{yr - 1}",
                              marker=dict(size=11, color="#f59e0b"), hovertemplate="%{y}<br>%{x:$,.0f}<extra>" + str(yr - 1) + "</extra>")
             fig2.add_scatter(x=y["this"], y=labels, mode="markers+text", name=f"{yr}", marker=dict(size=11, color="#2563EB"),
-                             text=[("new" if pd.isna(p) else f"{p:+.0%}") for p in y["pct"]], textposition="middle right",
+                             text=[("new" if pd.isna(p) else (f"{1 + p:.0f}×" if p >= 3 else f"{p:+.0%}")) for p in y["pct"]], textposition="middle right",
                              cliponaxis=False, hovertemplate="%{y}<br>%{x:$,.0f}<extra>" + str(yr) + "</extra>")
             fig2.update_layout(template=TEMPLATE, title=f"Same months, {yr - 1} vs {yr} ({ov_names})", height=460,
                                legend=dict(orientation="h", x=1, xanchor="right", y=-0.07, yanchor="top"),

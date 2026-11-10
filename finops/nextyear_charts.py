@@ -58,6 +58,11 @@ def services_chart(ny: NextYear, p: str, monthly_budget: float) -> go.Figure:
     fig = go.Figure()
     fig.add_scatter(x=list(f.index) + list(f.index[::-1]), y=list(f["High"]) + list(f["Low"][::-1]), fill="toself",
                     fillcolor=rgba(col, 0.18), line=dict(width=0), name="Low–High range", hoverinfo="skip")
+    pre = ny.hist.get(p, pd.Series(dtype=float))
+    pre = pre[pre.index < act.index[0]]
+    if len(pre):
+        fig.add_scatter(x=pre.index, y=pre, name="Earlier months", mode="lines+markers", line=dict(color="#94a3b8", width=1.5, dash="dot"),
+                        marker=dict(size=5, color="#94a3b8"), hovertemplate="%{y:$,.0f}")
     fig.add_scatter(x=act.index, y=act, name="Actual", mode="lines+markers", line=dict(color=col, width=2), marker=dict(size=7),
                     hovertemplate="%{y:$,.0f}")
     fig.add_scatter(x=[act.index[-1]] + list(f.index), y=[act.iloc[-1]] + list(f["Base"]), name="Base forecast", mode="lines+markers",
@@ -71,7 +76,7 @@ def services_chart(ny: NextYear, p: str, monthly_budget: float) -> go.Figure:
     fig = _layout(fig, 360)
     fig.update_layout(margin=dict(r=70), title=dict(text=f"{p} Cloud Services", font=dict(size=13)))
     fig.update_xaxes(tickformat="%b %y", dtick="M6", tickangle=0)
-    fig.update_yaxes(range=[0, max(f["High"].max(), monthly_budget, act.max()) * 1.08])
+    fig.update_yaxes(range=[0, max(f["High"].max(), monthly_budget, act.max(), pre.max() if len(pre) else 0) * 1.08])
     return fig
 
 

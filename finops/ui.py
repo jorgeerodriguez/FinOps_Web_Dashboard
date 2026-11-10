@@ -13,7 +13,7 @@ def money(v: float) -> str:
     if pd.isna(v):
         return "–"
     a = abs(v)
-    s = f"${a/1e6:,.2f}M" if a >= 1e6 else f"${a/1e3:,.0f}K" if a >= 1e4 else f"${a:,.0f}"
+    s = f"${a/1e6:,.2f}M" if a >= 999_500 else f"${a/1e3:,.0f}K" if a >= 1e4 else f"${a:,.0f}"
     return "-" + s if v < 0 else s
 
 

@@ -1,7 +1,7 @@
 """Marketplace / third-party contract calendar.
 
 Ported from your cloud_forecast.contract_schedule / _marketplace: each contract's billing cadence is read from
-its last 12 billed months and repeated forward (monthly = avg of last 3; regular gap = last amount at that gap;
+its last 12 billed months (compared with the 12 before, when loaded) and repeated forward (monthly = avg of last 3; regular gap = last amount at that gap;
 single charge = annual renewal, same month next year). Marketplace is lumpy, so a statistical forecast is the
 wrong tool -- the renewal calendar is the budget.
 """
@@ -99,6 +99,9 @@ def build(mkt: pd.DataFrame, horizon_end: pd.Timestamp):
     m.index.name = "date"
     ct = pd.DataFrame(rows).set_index(["provider", "contract"])
     ct["billed_12mo"] = piv.reindex(basis_idx).sum()
+    prev_idx = pd.date_range(basis_idx[0] - relativedelta(months=BASIS_MONTHS), basis_idx[0] - relativedelta(months=1), freq="MS")
+    have_prev = prev_idx[0] >= all_months[0]                     # only meaningful when the 12 months before the basis are loaded
+    ct["billed_prev12"] = piv.reindex(prev_idx).sum() if have_prev else np.nan
     return ct.reset_index(), m, last
 
 

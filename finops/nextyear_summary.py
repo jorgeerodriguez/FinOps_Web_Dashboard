@@ -215,7 +215,11 @@ exit run-rate (High < 10%, Medium < 25%). Range = ±1.28 × RMSE, widening with 
 corrected automatically; GCP's trend is measured only from the month set in config (skipping a one-time launch ramp). New workloads and
 shutdowns are real and are not adjusted.
 
-**Caveats.** Only ~12 billed months feed the model, so seasonality is not modelled and trends are less certain than a multi-year history would give.
+**Look-back.** The method is re-run as it would have run 12 months ago (data up to that month only, no reviewed adjustments) and compared with what
+was billed, so the ranges can be judged against a real result. The earlier months of history are drawn grey in the provider charts for context.
+
+**Caveats.** Only the latest 12 billed months feed the model. Two years of history is enough to show last year's pattern and to test the method, but not
+to estimate seasonality reliably (it would be confused with growth), so seasonality is still not modelled.
 Annual Marketplace renewals assume the same price. New workloads or planned savings are not in the baseline — use the Forecast & Budget page's
 adjustment slider to layer them on.
 """

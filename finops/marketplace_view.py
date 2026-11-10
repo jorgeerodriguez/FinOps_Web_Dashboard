@@ -9,7 +9,8 @@ from .marketplace import build, stale_charges
 from .ui import TEMPLATE, heat_scale, money
 
 
-def assemble(mkt: pd.DataFrame, group: str = "Vendor", topn: int = 30) -> dict:
+def assemble(mkt: pd.DataFrame, group: str = "Vendor", topn: int = 30, hist_months: int | None = None) -> dict:
+    """hist_months: how many billed months the calendar and cash view show (None = all we hold). Totals always use everything."""
     last0 = mkt.date.max()
     yr = last0.year
     ct, m, last = build(mkt, pd.Timestamp(yr + 1, 12, 1))
@@ -23,19 +24,23 @@ def assemble(mkt: pd.DataFrame, group: str = "Vendor", topn: int = 30) -> dict:
     fy_nxt = long[long.date.dt.year == yr + 1].amount.sum()
     ytd = long[(long.date.dt.year == yr) & (long.kind == "actual")].amount.sum()
     next90 = long[(long.kind == "forecast") & (long.date <= last + pd.DateOffset(months=3))].amount.sum()
+    ytd_ly = long[(long.date.dt.year == yr - 1) & (long.date.dt.month <= last.month) & (long.kind == "actual")].amount.sum()
+    have_ly = m.index.min() <= pd.Timestamp(yr - 1, 1, 1) and ytd_ly > 0
     kpis = [
-        dict(label=f"YTD {yr} billed", value=money(ytd), delta=""),
+        dict(label=f"YTD {yr} billed", value=money(ytd), delta=f"{ytd / ytd_ly - 1:+.0%} vs YTD {yr - 1}" if have_ly else "", neutral=True),
         dict(label=f"{yr} full year (billed + scheduled)", value=money(fy_cur), delta=""),
         dict(label=f"{yr + 1} commitments", value=money(fy_nxt), delta=f"{fy_nxt / fy_cur - 1:+.0%} vs {yr}" if fy_cur else "", neutral=True),
         dict(label="Next 3 months scheduled", value=money(next90), delta=""),
         dict(label="Active contracts", value=str(int((ct.cadence != "Not billed in last 12 mo").sum())), delta=""),
     ]
 
-    # ---- calendar heatmap
+    # ---- calendar heatmap (only the months asked for: the contracts' history is kept in the totals, not all drawn)
+    shown = m.index if not hist_months else m.index[m.index >= last - pd.DateOffset(months=hist_months - 1)]
+    long = long[long.date.isin(shown)] if hist_months else long
     rows = long.groupby("row").amount.sum().nlargest(topn).index
     cal = long[long.row.isin(rows)].pivot_table(index="row", columns="date", values="amount", aggfunc="sum").reindex(rows[::-1])
-    x = [d.strftime("%b %y") for d in m.index]
-    cal = cal.reindex(columns=m.index)
+    x = [d.strftime("%b %y") for d in shown]
+    cal = cal.reindex(columns=shown)
     is_act = np.array([d <= last for d in cal.columns])
     mask = np.tile(is_act, (len(cal), 1))
     z_act = cal.where(mask, np.nan).replace(0, np.nan)
@@ -72,7 +77,9 @@ def assemble(mkt: pd.DataFrame, group: str = "Vendor", topn: int = 30) -> dict:
     # ---- tables
     quarter = (long[long.date.dt.year == yr + 1].assign(Q=lambda d: "Q" + d.date.dt.quarter.astype(str)).groupby("Q").amount.sum())
     t = ct.copy()
-    sel = lambda p, c, y: long[(long.provider == p) & (long.contract == c) & (long.date.dt.year == y)]
+    full = (m.stack([0, 1]).rename("amount").reset_index().rename(columns={"level_1": "provider", "level_2": "contract"}))
+    full = full[full.amount > 0]
+    sel = lambda p, c, y: full[(full.provider == p) & (full.contract == c) & (full.date.dt.year == y)]
     t[f"{yr} (billed + sched.)"] = [sel(p, c, yr).amount.sum() for p, c in zip(t.provider, t.contract)]
     t[f"{yr + 1} forecast"] = [sel(p, c, yr + 1).amount.sum() for p, c in zip(t.provider, t.contract)]
     t[f"billing months {yr + 1}"] = [", ".join(sel(p, c, yr + 1).date.dt.strftime("%b")) or "—" for p, c in zip(t.provider, t.contract)]
@@ -81,8 +88,17 @@ def assemble(mkt: pd.DataFrame, group: str = "Vendor", topn: int = 30) -> dict:
                 quarter=quarter, contracts=t, risk=stale_charges(mkt, ct), group=group)
 
 
+def _yoy(cur, prev):
+    if pd.isna(prev):
+        return "–"
+    if prev < 100:
+        return "new" if cur >= 100 else "–"
+    return f"{cur / prev - 1:+.0%}"
+
+
 def contracts_display(t: pd.DataFrame, yr: int) -> pd.DataFrame:
-    return t.assign(amount=t.amount.map(money), billed_12mo=t.billed_12mo.map(money),
+    yoy = [_yoy(c, p) for c, p in zip(t.billed_12mo, t.billed_prev12)] if "billed_prev12" in t else ["–"] * len(t)
+    return t.assign(**{"vs prior 12 mo": yoy}).assign(amount=t.amount.map(money), billed_12mo=t.billed_12mo.map(money),
                     next_charge=t.next_charge.dt.strftime("%b %Y").fillna("—"),
                     **{f"{yr} (billed + sched.)": t[f"{yr} (billed + sched.)"].map(money),
                        f"{yr + 1} forecast": t[f"{yr + 1} forecast"].map(money)}

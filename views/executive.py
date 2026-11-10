@@ -1,5 +1,6 @@
 import streamlit as st
 from finops import asnow
+from finops import history as hist
 from finops import exec_summary as es
 from finops.exec_charts import cumulative_block
 from finops.exec_report import build_report, save_report
@@ -27,6 +28,16 @@ if _a is not None and _a.total["budget"]:
         f"**{_a.month:%B} so far** (through {_a.as_of:%b %d}): {money(_T['mtd'])} · projected month-end **{money(_T['projected'])}** "
         f"({money(_T['low'])}–{money(_T['high'])}) vs {money(_T['budget'])} budget → **{money(abs(_vb))} {'over' if _vb > 0 else 'under'}**. "
         f"Early-month estimate; details on **Month to Date**.")
+
+_h = hist.compute(df)
+if _h.has_prev:
+    _c, _p = hist.r12(_h)
+    st.info(f"**Two-year view:** the latest 12 months cost **{money(_c)}**, {_c / _p - 1:+.1%} vs the 12 months before ({money(_p)}). "
+            "What changed, one-off months and a forecast look-back are on **Two-Year History**.")
+    try:
+        st.page_link("views/history.py", label="Open Two-Year History", icon="🕰️")
+    except Exception:                    # not running under st.navigation (e.g. a headless test)
+        pass
 
 left, right = st.columns(2)
 left.subheader("Monthly spend by provider")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import getpass
 from pathlib import Path
 
+from . import history as hist
 from . import nextyear_charts as ch
 from . import nextyear_summary as nys
 from . import store
@@ -14,7 +15,7 @@ from .ui import money
 W = PAGE_W - 40
 
 
-def build_report(ny: NextYear, budgets: dict, assumed: bool = False) -> str:
+def build_report(ny: NextYear, budgets: dict, assumed: bool = False, lookback: dict | None = None) -> str:
     fy = ny.fy
     sm = nys.summarize(ny, budgets)
     r = Report(f"FY{fy} Cloud Budget Forecast",
@@ -86,6 +87,16 @@ def build_report(ny: NextYear, budgets: dict, assumed: bool = False) -> str:
     for p, label in (("AWS", "AWS accounts"), ("GCP", "GCP projects")):
         r.section(f"{label} — FY{fy} forecast by line", new_page=True, flow=True)
         r.table(nys.account_display(ny, p), index=True)
+
+    # ---- look-back
+    if lookback is not None:
+        r.section("How did this method do last year?", new_page=True)
+        for t in hist.lookback_text(lookback)[:1]:
+            r.text(t)
+        r.chart(hist.fig_lookback(lookback), height=300)
+        r.table(hist.lookback_table(lookback))
+        r.caption("The same method re-run with only the data available 12 months before the latest billed month (no reviewed adjustments), against what was billed. "
+                  "It shows how far to trust the Low–High ranges above.")
 
     # ---- anomalies + method
     an = nys.anomalies_display(ny)

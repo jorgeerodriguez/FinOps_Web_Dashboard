@@ -18,10 +18,10 @@ def build_report(group: str = "Vendor") -> str:
     with force_view("Cloud Services (budget basis)"):
         allc = get_data(apply_view=False)
         mkt = allc[allc.category == "Marketplace"]
-        d = mv.assemble(mkt, group, PRINT_ROWS)
+        d = mv.assemble(mkt, group, PRINT_ROWS, hist_months=14)
         yr, W = d["yr"], PAGE_W - 40
         r = Report(f"Marketplace & Third-Party Contracts — {d['last']:%B %Y}",
-                   f"AWS + GCP Marketplace · renewal calendar built from each contract's last 12 billed months · billed through {d['last']:%B %Y}")
+                   f"AWS + GCP Marketplace · renewal calendar built from each contract's last 12 billed months (compared with the 12 before) · billed through {d['last']:%B %Y}")
 
         # page 1: KPIs + calendar
         r.section()
@@ -44,20 +44,21 @@ def build_report(group: str = "Vendor") -> str:
             r.caption("Ended, or renewing outside the window. Confirm with the owner before budgeting.")
 
         # page 3+: contracts
-        r.section(f"Contracts — {yr + 1} forecast", flow=True, new_page=True)
+        r.section(f"Contracts — {yr + 1} forecast", new_page=True)
         cd = mv.contracts_display(d["contracts"], yr)
-        cd = cd[cd["cadence"] != "Not billed in last 12 mo"].head(30)
-        keep = ["provider", "vendor", "cadence", "per charge", "billed last 12 mo", f"{yr} (billed + sched.)", f"{yr + 1} forecast",
+        cd = cd[cd["cadence"] != "Not billed in last 12 mo"].head(10)
+        keep = ["provider", "vendor", "cadence", "per charge", "billed last 12 mo", "vs prior 12 mo", f"{yr} (billed + sched.)", f"{yr + 1} forecast",
                 f"billing months {yr + 1}", "next_charge"]
         r.table(cd[keep].rename(columns={"next_charge": "next charge"}))
-        r.caption("Top contracts by next-year forecast. Cadence is read from the last 12 billed months; annual contracts repeat at last year's price.")
+        r.caption("Top contracts by next-year forecast. Cadence is read from the last 12 billed months; annual contracts repeat at last year's price (compare with “vs prior 12 mo”).")
 
-        r.section("Notes")
+        r.parts.append("<h3>Notes</h3>")
         log = store.read_log()
         r.bullets([
             "**Method:** monthly = average of the last 3 months; regular gap (quarterly, semiannual …) = last amount at that gap; "
             "a single charge = annual renewal in the same month next year. Charges under 10% of a contract's largest are ignored when reading the cadence.",
-            "**History:** about 14 months of billing data, so an annual contract's price change at renewal is not anticipated.",
+            f"**History:** billed data from {mkt.date.min():%B %Y}. The calendar draws the last 14 billed months; \"vs prior 12 mo\" compares each contract's latest 12 months with the 12 before, "
+            "so price changes at renewal are visible. The forecast itself still repeats last year's price.",
             "**Not a trend forecast:** Marketplace is planned as a calendar of commitments; confirm renewals with owners before budgeting.",
         ])
         last_refresh = log["when"].max() if len(log) else "unknown"

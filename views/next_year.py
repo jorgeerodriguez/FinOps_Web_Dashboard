@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from finops import history as hist
 from finops import nextyear as ny_mod
 from finops import nextyear_charts as ch
 from finops import nextyear_summary as nys
@@ -36,7 +37,7 @@ if assumed:
 budgets = {"AWS": b_aws, "GCP": b_gcp}
 sm = nys.summarize(ny, budgets)
 
-st.caption(f"Built from the last 12 billed months ({ny.basis[0]:%b %Y} – {ny.last:%b %Y}). Cloud Services only is held to the budget; "
+st.caption(f"Built from the last 12 billed months ({ny.basis[0]:%b %Y} – {ny.last:%b %Y}); earlier months are shown in grey for context. Cloud Services only is held to the budget; "
            "Marketplace is planned separately from the renewal calendar. Method in the expander at the bottom.")
 
 # ----------------------------------------------------------------------------- 1. leadership summary
@@ -134,6 +135,25 @@ for tab, p in ((ta, "AWS"), (tg, "GCP")):
 st.markdown("**Top-down vs bottom-up reconciliation**")
 show(ch.reconciliation(ny, budgets), width="stretch")
 
+# ----------------------------------------------------------------------------- 7b. look-back
+st.subheader("How did this method do last year?")
+
+
+@st.cache_data(show_spinner="Re-running last year's forecast…")
+def _lookback(stamp: float):
+    return hist.lookback(get_data(apply_view=False))
+
+
+lb = _lookback(float(len(df_all)))
+if lb is None:
+    st.info("A look-back test needs at least 24 billed months of history.")
+else:
+    for t in hist.lookback_text(lb):
+        st.markdown(f"- {t}")
+    show(hist.fig_lookback(lb), width="stretch")
+    st.dataframe(hist.lookback_table(lb), hide_index=True, width="stretch")
+    st.caption("Cloud Services only, no reviewed adjustments (those were made with hindsight). Use it to judge how wide the Low–High range needs to be.")
+
 # ----------------------------------------------------------------------------- 8. anomalies
 an = nys.anomalies_display(ny)
 if an is not None:
@@ -163,7 +183,7 @@ st.caption("Self-contained, print-ready (light theme, landscape Letter). Uses th
            "tables show the Base scenario. Open it in a browser and use *Print → Save as PDF* for a PDF.")
 if st.button("Build HTML report", key="ny_report_btn"):
     with st.spinner("Building report…"):
-        html = build_report(ny, budgets, assumed)
+        html = build_report(ny, budgets, assumed, lb)
         path = save_report(html, ny)
     st.session_state["ny_report"] = (html, path.name, str(path))
 if "ny_report" in st.session_state:

@@ -1,0 +1,347 @@
+"""Savings ledger and owner scorecard: numbers, figures and tables with NO Streamlit in them.
+
+A *saving* is a sustained step down in a line's monthly cost, measured against that line's own earlier peak:
+
+  peak      highest 3-month average of the line, ending at least 3 months before the latest billed month
+  now       average of the latest 3 billed months
+  qualifies drop >= materiality ($/month), now <= 85% of peak, and none of the latest 3 months back near the peak
+  class     Reduced   the line still runs, smaller                 -> a saving
+            Ended     now < 10% of peak                            -> a shutdown (confirm it was intended)
+            One-off   one month carried >= 70% of the peak window  -> never recurring cost, NOT a saving
+            Check     some (not all) of the latest 3 months are ~$0 -> likely a billing gap, NOT a saving
+  realized  what the line would have cost had it stayed at its peak level, minus what it actually cost, since the step down
+  erosion   a line that fell and then climbed back: the share of the saving that has returned
+
+Cost data only: nothing here says WHY a line fell. Every row needs its owner to confirm."""
+from __future__ import annotations
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+
+from .history import History
+from .ui import COLORS, TEMPLATE, money, pct
+
+MATERIALITY = 5_000            # $/month
+SKIP = {"Savings Plans for AWS Compute usage"}      # billed in lumps with gaps; handled by the Next Year normalisation
+CLASS_COLOR = {"Reduced": "#15803d", "Ended": "#64748b", "One-off": "#b45309", "Check": "#7c3aed"}
+CLASS_HELP = {"Reduced": "Still running, costs less: a saving", "Ended": "Near zero now: a shutdown to confirm",
+              "One-off": "A single spike that did not repeat: not a saving", "Check": "Some recent months are $0: possible billing gap, not a saving"}
+
+
+# --------------------------------------------------------------------------------------- series
+def series(df: pd.DataFrame, level: str) -> pd.DataFrame:
+    """Months x (provider, name) for every line, missing months as $0."""
+    p = df.pivot_table(index="date", columns=["provider", level], values="cost_net", aggfunc="sum")
+    return p.reindex(pd.date_range(df["date"].min(), df["date"].max(), freq="MS")).fillna(0.0)
+
+
+def total_series(df: pd.DataFrame) -> pd.DataFrame:
+    p = df.pivot_table(index="date", columns="provider", values="cost_net", aggfunc="sum")
+    p = p.reindex(pd.date_range(df["date"].min(), df["date"].max(), freq="MS")).fillna(0.0)
+    p.columns = pd.MultiIndex.from_product([p.columns, ["All"]])
+    return p
+
+
+# --------------------------------------------------------------------------------------- the scan
+@dataclass
+class Scan:
+    ledger: pd.DataFrame            # one row per line that stepped down
+    erosion: pd.DataFrame           # lines that fell and then climbed back
+    avoided: pd.DataFrame           # month x class: $ avoided that month versus the old peak level
+    materiality: float
+
+
+def _scan_line(v: np.ndarray, idx: pd.DatetimeIndex, mat: float):
+    n = len(v)
+    if n < 9:
+        return None
+    r3 = pd.Series(v).rolling(3).mean().to_numpy()
+    cand = r3[: n - 3]                                    # windows ending at least 3 months before the latest month
+    if not np.isfinite(cand[2:]).any():
+        return None
+    i_pk = int(np.nanargmax(np.where(np.isfinite(cand), cand, -np.inf)))
+    peak = float(r3[i_pk])
+    if peak < mat:
+        return None
+    window = v[i_pk - 2: i_pk + 1]
+    isolated = bool(window.sum() > 0 and window.max() / window.sum() >= 0.7)
+    now = float(v[-3:].mean())
+    last3 = v[-3:]
+    out = {"peak": peak, "now": now, "i_pk": i_pk, "isolated": isolated, "peak_window": f"{idx[i_pk - 2]:%b %Y} – {idx[i_pk]:%b %Y}"}
+    # ---- erosion: fell to a trough after the peak and then climbed back
+    tr = r3[i_pk + 1: n - 2]
+    if len(tr) and np.isfinite(tr).any() and not isolated:
+        j = int(np.nanargmin(np.where(np.isfinite(tr), tr, np.inf)))
+        trough, i_tr = float(tr[j]), i_pk + 1 + j
+        if peak - trough >= mat and now - trough >= mat and now >= 1.15 * trough:
+            out["erosion"] = dict(trough=trough, trough_end=idx[i_tr], given_back=(now - trough) / (peak - trough))
+    # ---- ledger
+    drop = peak - now
+    if drop >= mat and now <= 0.85 * peak and last3.max() < 0.95 * peak:
+        low = last3 < 0.05 * peak
+        gap = bool(low.any() and not low.all())
+        cls = "One-off" if isolated else ("Check" if gap else ("Ended" if now < 0.1 * peak else "Reduced"))
+        mid = now + 0.5 * drop
+        above = np.where(v[i_pk:] > mid)[0]
+        since_i = min(i_pk + (int(above.max()) if len(above) else 0) + 1, n - 1)
+        avoided = peak - v[since_i:]
+        out.update(cls=cls, lower=drop, since=idx[since_i], realized=0.0 if cls in ("One-off", "Check") else float(avoided.sum()),
+                   avoided=pd.Series(avoided, index=idx[since_i:]) if cls in ("Reduced", "Ended") else None)
+    return out
+
+
+def scan(S: pd.DataFrame, mat: float = MATERIALITY, owners: dict | None = None, level_name: str = "name") -> Scan:
+    led, ero, av = [], [], {"Reduced": [], "Ended": []}
+    idx = S.index
+    for (prov, name), s in S.items():
+        if name in SKIP:
+            continue
+        r = _scan_line(s.to_numpy(dtype=float), idx, mat)
+        if not r:
+            continue
+        own = (owners or {}).get((prov, name), "")
+        if "cls" in r:
+            led.append(dict(provider=prov, name=name, owner=own, cls=r["cls"], peak=r["peak"], peak_window=r["peak_window"], now=r["now"],
+                            lower=r["lower"], annualized=r["lower"] * 12, since=r["since"], realized=r["realized"], pct=r["lower"] / r["peak"]))
+            if r.get("avoided") is not None:
+                av[r["cls"]].append(r["avoided"])
+        if "erosion" in r:
+            e = r["erosion"]
+            ero.append(dict(provider=prov, name=name, owner=own, peak=r["peak"], peak_window=r["peak_window"], trough=e["trough"],
+                            trough_end=e["trough_end"], now=r["now"], regrown=r["now"] - e["trough"], given_back=e["given_back"]))
+    ledger = pd.DataFrame(led, columns=["provider", "name", "owner", "cls", "peak", "peak_window", "now", "lower", "annualized", "since", "realized", "pct"])
+    ledger = ledger.sort_values("realized", ascending=False).reset_index(drop=True)
+    erosion = pd.DataFrame(ero, columns=["provider", "name", "owner", "peak", "peak_window", "trough", "trough_end", "now", "regrown", "given_back"])
+    erosion = erosion.sort_values("regrown", ascending=False).reset_index(drop=True)
+    avoided = pd.DataFrame(0.0, index=idx, columns=["Reduced", "Ended"])
+    for k, lst in av.items():
+        for a in lst:
+            avoided[k] = avoided[k].add(a.reindex(idx).fillna(0.0), fill_value=0.0)
+    return Scan(ledger, erosion, avoided, mat)
+
+
+def owners_map(df: pd.DataFrame, level: str = "account") -> dict:
+    """(provider, account) -> the owner carrying most of its recent spend (blank when unassigned)."""
+    if level != "account" or "owner" not in df:
+        return {}
+    d = df[df.date > df.date.max() - pd.DateOffset(months=12)]
+    g = d.groupby(["provider", "account", "owner"]).cost_net.sum().reset_index().sort_values("cost_net", ascending=False).drop_duplicates(["provider", "account"])
+    return {(r.provider, r.account): ("" if r.owner == "(unassigned)" else r.owner) for r in g.itertuples()}
+
+
+# --------------------------------------------------------------------------------------- headline numbers and words
+def kpis(sc: Scan, h: History) -> list[dict]:
+    L = sc.ledger
+    red, end = L[L.cls == "Reduced"], L[L.cls == "Ended"]
+    giv = sc.erosion.regrown.sum()
+    return [
+        dict(label="Savings run-rate (reduced lines)", value=money(red.lower.sum()) + "/mo", delta=f"{money(red.annualized.sum())}/yr", neutral=True,
+             help="Monthly drop of lines that still run but cost less, versus each line's own earlier peak"),
+        dict(label="Realized to date", value=money(red.realized.sum()), delta=f"{len(red)} lines", neutral=True,
+             help="What those lines would have cost at their old level, minus what they cost, since each one stepped down"),
+        dict(label="Shutdowns (ended lines)", value=money(end.lower.sum()) + "/mo", delta=f"{len(end)} lines", neutral=True,
+             help="Lines now near $0. Confirm each was intended before counting it as a saving"),
+        dict(label="Savings given back", value=money(giv) + "/mo", delta=f"{len(sc.erosion)} lines", neutral=True, inverse=True,
+             help="Lines that dropped and then climbed back up"),
+        dict(label="Not counted", value=str(int(L.cls.isin(['One-off', 'Check']).sum())), delta="one-offs / billing gaps", neutral=True,
+             help="Spikes that did not repeat, or lines with $0 months that look like billing gaps"),
+    ]
+
+
+def narrative(sc: Scan, h: History, lens: str) -> list[str]:
+    L, E = sc.ledger, sc.erosion
+    out = []
+    red, end = L[L.cls == "Reduced"], L[L.cls == "Ended"]
+    if len(red):
+        top = red.head(3)
+        out.append(f"**{len(red)} {lens}s are running smaller than at their peak**, taking **{money(red.lower.sum())} a month ({money(red.annualized.sum())} a year)** "
+                   f"off the run-rate; **{money(red.realized.sum())} has been avoided so far**. Largest: "
+                   + "; ".join(f"{r.provider} · {r.name[:34]} ({money(r.realized)}, {r.pct:.0%} lower)" for r in top.itertuples()) + ".")
+        byp = red.groupby("provider").lower.sum()
+        out.append("By provider: " + ", ".join(f"{p} {money(v)}/mo" for p, v in byp.items()) + ".")
+    if len(end):
+        out.append(f"**{len(end)} lines ended** ({money(end.lower.sum())}/mo): treat as savings only after the owner confirms the shutdown was intended. "
+                   f"Biggest: " + "; ".join(f"{r.provider} · {r.name[:30]} ({money(r.lower)}/mo)" for r in end.sort_values('lower', ascending=False).head(3).itertuples()) + ".")
+    if len(E):
+        out.append(f"**{money(E.regrown.sum())}/mo of earlier reductions has come back** across {len(E)} lines (largest: "
+                   + "; ".join(f"{r.provider} · {r.name[:30]} {r.given_back:.0%} given back" for r in E.head(3).itertuples()) + ").")
+    ex = L[L.cls.isin(["One-off", "Check"])]
+    if len(ex):
+        out.append(f"Not counted: {int((ex.cls == 'One-off').sum())} one-off spikes and {int((ex.cls == 'Check').sum())} lines with possible billing gaps "
+                   f"({money(ex.peak.sum())}/mo of peak levels that would otherwise look like savings).")
+    return out
+
+
+# --------------------------------------------------------------------------------------- figures
+def fig_over_time(sc: Scan) -> go.Figure:
+    a = sc.avoided
+    fig = go.Figure()
+    for k in ("Reduced", "Ended"):
+        fig.add_bar(x=a.index, y=a[k], name={"Reduced": "Reduced lines (saving)", "Ended": "Ended lines (confirm)"}[k], marker_color=CLASS_COLOR[k],
+                    hovertemplate="%{y:$,.0f}")
+    cum = a["Reduced"].cumsum()
+    fig.add_scatter(x=a.index, y=cum, name="Cumulative (reduced lines)", mode="lines", yaxis="y2", line=dict(color="#0f172a", width=2.5),
+                    hovertemplate="%{y:$,.0f}")
+    fig.update_layout(template=TEMPLATE, barmode="stack", height=330, margin=dict(t=30, b=10), hovermode="x unified", legend=dict(orientation="h", y=-0.15),
+                      yaxis=dict(tickformat="$.2~s", title="Avoided per month", rangemode="tozero"), yaxis2=dict(overlaying="y", side="right", tickformat="$.2~s", showgrid=False, title="Cumulative", rangemode="tozero"),
+                      xaxis=dict(tickformat="%b %y", dtick="M2"))
+    return fig
+
+
+def fig_top(sc: Scan, n: int = 12) -> go.Figure:
+    L = sc.ledger[sc.ledger.cls.isin(["Reduced", "Ended"])].sort_values("lower", ascending=False).head(n).iloc[::-1]
+    fig = go.Figure(go.Bar(x=L.lower, y=[f"{p} · {nm[:30]}" for p, nm in zip(L.provider, L.name)], orientation="h", marker_color=[CLASS_COLOR[c] for c in L.cls],
+                           text=[f"{money(d)}/mo" for d in L.lower], textposition="outside", cliponaxis=False,
+                           hovertemplate="%{y}<br>%{x:$,.0f} lower per month<extra></extra>"))
+    fig.update_layout(template=TEMPLATE, height=max(260, 26 * len(L) + 80), margin=dict(t=20, b=10, l=10, r=70), xaxis=dict(tickformat="$.2~s"), yaxis=dict(automargin=True))
+    return fig
+
+
+def fig_arc(df: pd.DataFrame) -> go.Figure:
+    """Each provider's 3-month average over the whole history: where it peaked, where it fell to, where it is now."""
+    T = total_series(df)
+    fig = go.Figure()
+    for (p, _), s in T.items():
+        r = s.rolling(3).mean()
+        fig.add_scatter(x=r.index, y=r, name=p, mode="lines", line=dict(color=COLORS.get(p, "#64748b"), width=2.5), hovertemplate="%{y:$,.0f}")
+        i_pk = r.iloc[: len(r) - 3].idxmax()
+        i_tr = r.loc[i_pk:].iloc[1:-2].idxmin() if len(r.loc[i_pk:]) > 4 else None
+        declined = r.iloc[-1] < 0.95 * r[i_pk]                      # only mark a peak the line has actually come down from
+        if declined:
+            fig.add_scatter(x=[i_pk], y=[r[i_pk]], mode="markers+text", text=[f"peak {money(r[i_pk])}"], textposition="top center", showlegend=False,
+                            marker=dict(size=9, color=COLORS.get(p, "#64748b")))
+        if declined and i_tr is not None and r[i_tr] < r[i_pk]:
+            fig.add_scatter(x=[i_tr], y=[r[i_tr]], mode="markers+text", text=[f"low {money(r[i_tr])}"], textposition="bottom center", showlegend=False,
+                            marker=dict(size=9, symbol="diamond", color=COLORS.get(p, "#64748b")))
+        fig.add_scatter(x=[r.index[-1]], y=[r.iloc[-1]], mode="markers+text", text=[money(r.iloc[-1])], textposition="middle right", showlegend=False,
+                        marker=dict(size=9, color="#0f172a"))
+    fig.update_layout(template=TEMPLATE, height=320, margin=dict(t=20, b=10, r=50), hovermode="x unified", legend=dict(orientation="h", y=-0.15),
+                      yaxis=dict(tickformat="$.2~s", rangemode="tozero", title="3-month average / month"), xaxis=dict(tickformat="%b %y"))
+    return fig
+
+
+# --------------------------------------------------------------------------------------- tables
+def ledger_display(L: pd.DataFrame) -> pd.DataFrame:
+    if L.empty:
+        return L
+    return pd.DataFrame({"Provider": L.provider, "Line": L.name.str.slice(0, 46), "Owner": L.owner, "Type": L.cls, "Peak /mo": L.peak.map(money),
+                         "Peak window": L.peak_window, "Now /mo": L.now.map(money), "Lower by /mo": L["lower"].map(money), "%": L.pct.map(lambda v: f"-{v:.0%}"),
+                         "Since": L.since.dt.strftime("%b %Y"), "Realized to date": L.realized.map(money),
+                         "Per year": [money(a) if c in ("Reduced", "Ended") else "–" for a, c in zip(L.annualized, L.cls)]})
+
+
+def erosion_display(E: pd.DataFrame) -> pd.DataFrame:
+    if E.empty:
+        return E
+    return pd.DataFrame({"Provider": E.provider, "Line": E.name.str.slice(0, 46), "Owner": E.owner, "Peak /mo": E.peak.map(money), "Peak window": E.peak_window,
+                         "Low /mo": E.trough.map(money), "Low reached": E.trough_end.dt.strftime("%b %Y"), "Now /mo": E.now.map(money),
+                         "Came back /mo": E.regrown.map(money), "Share given back": E.given_back.map(lambda v: f"{min(v, 9.99):.0%}" + (" (above old peak)" if v > 1 else ""))})
+
+
+# --------------------------------------------------------------------------------------- owner scorecard
+def owner_scorecard(df: pd.DataFrame, h: History, acct: Scan) -> pd.DataFrame:
+    """One row per owner: spend, change vs the 12 months before, run-rate, savings and what is rising or falling."""
+    d = df.assign(owner=df["owner"].where(df["owner"] != "(unassigned)", "(unassigned)"))
+    cur, prev = d[d.date.isin(h.cur)], d[d.date.isin(h.prev)] if h.has_prev else d.iloc[0:0]
+    c, p = cur.groupby("owner").cost_net.sum(), prev.groupby("owner").cost_net.sum()
+    last3 = d[d.date.isin(h.m.index[-3:])].groupby("owner").cost_net.sum() / 3
+    ly3 = d[d.date.isin(h.m.index[-3:] - pd.DateOffset(years=1))].groupby("owner").cost_net.sum() / 3
+    t = pd.DataFrame({"latest": c, "prior": p, "exit": last3, "exit_ly": ly3}).fillna(0.0)
+    t["change"] = t.latest - t.prior
+    t["pct"] = t.change / t.prior.where(t.prior > 1000)
+    t["share"] = t.latest / t.latest.sum()
+    t["accounts"] = cur[cur.cost_net > 0].groupby("owner").account.nunique()
+    L, E = acct.ledger, acct.erosion
+    red = L[L.cls == "Reduced"].groupby("owner")
+    t["saving_mo"] = red["lower"].sum()
+    t["realized"] = red["realized"].sum()
+    t["ended_mo"] = L[L.cls == "Ended"].groupby("owner")["lower"].sum()
+    t["given_back_mo"] = E.groupby("owner").regrown.sum()
+    # biggest rising / falling account per owner (latest 12 vs prior 12)
+    a = pd.DataFrame({"latest": cur.groupby(["owner", "provider", "account"]).cost_net.sum(),
+                      "prior": prev.groupby(["owner", "provider", "account"]).cost_net.sum()}).fillna(0.0)
+    a["chg"] = a.latest - a.prior
+    up, dn = {}, {}
+    for o, g in a.groupby(level=0):
+        g = g.droplevel(0)
+        if (g.chg > 0).any():
+            (pv, ac), r = g.chg.idxmax(), g.loc[g.chg.idxmax()]
+            up[o] = f"{pv} · {ac[:28]} ({'+' + money(r.chg)})"
+        if (g.chg < 0).any():
+            (pv, ac), r = g.chg.idxmin(), g.loc[g.chg.idxmin()]
+            dn[o] = f"{pv} · {ac[:28]} ({money(r.chg)})"
+    t["biggest_rise"], t["biggest_fall"] = pd.Series(up), pd.Series(dn)
+    t = t[(t.latest.abs() + t.prior.abs()) > 0]
+    t[["saving_mo", "realized", "ended_mo", "given_back_mo"]] = t[["saving_mo", "realized", "ended_mo", "given_back_mo"]].fillna(0.0)
+    return t.sort_values("latest", ascending=False)
+
+
+def scorecard_display(t: pd.DataFrame) -> pd.DataFrame:
+    sg = lambda v: ("+" if v > 0 else "") + money(v)
+    return pd.DataFrame({"Owner": t.index, "Accounts / projects": t.accounts.fillna(0).astype(int).values, "Latest 12 mo": t.latest.map(money).values,
+                         "Share": t.share.map(lambda v: f"{v:.0%}").values, "Prior 12 mo": t.prior.map(money).values, "Change": t.change.map(sg).values,
+                         "%": t.pct.map(lambda v: "–" if pd.isna(v) else (f"{1 + v:.0f}×" if v >= 3 else f"{v:+.0%}")).values,
+                         "Exit run-rate /mo": t.exit.map(money).values, "Savings /mo": t.saving_mo.map(money).values, "Realized": t.realized.map(money).values,
+                         "Given back /mo": t.given_back_mo.map(money).values, "Biggest rise": t.biggest_rise.fillna("").values,
+                         "Biggest fall": t.biggest_fall.fillna("").values})
+
+
+def fig_owner_change(t: pd.DataFrame, n: int = 14) -> go.Figure:
+    t = t.reindex(t.change.abs().sort_values(ascending=False).index).head(n).iloc[::-1]
+    fig = go.Figure(go.Bar(x=t.change, y=t.index, orientation="h", marker_color=["#b91c1c" if v > 0 else "#15803d" for v in t.change],
+                           text=[("+" if v > 0 else "") + money(v) for v in t.change], textposition="outside", cliponaxis=False,
+                           hovertemplate="%{y}<br>%{x:$,.0f} vs prior 12 months<extra></extra>"))
+    lo, hi = min(t.change.min(), 0), max(t.change.max(), 0)
+    fig.update_layout(template=TEMPLATE, height=max(280, 28 * len(t) + 80), margin=dict(t=20, b=10, l=10, r=70),
+                      xaxis=dict(tickformat="$.2~s", zeroline=True, range=[lo * 1.3 if lo < 0 else 0, hi * 1.2 if hi > 0 else 0]),
+                      yaxis=dict(automargin=True))
+    return fig
+
+
+def owner_detail(df: pd.DataFrame, h: History, owner: str, acct: Scan, top: int = 8) -> dict:
+    """Everything for one owner's review: monthly chart, account table, savings, erosion, rising lines."""
+    d = df[df.owner == owner]
+    cur, prev = d[d.date.isin(h.cur)], d[d.date.isin(h.prev)]
+    a = pd.DataFrame({"latest": cur.groupby(["provider", "account"]).cost_net.sum(), "prior": prev.groupby(["provider", "account"]).cost_net.sum()}).fillna(0.0)
+    a["change"] = a.latest - a.prior
+    a["pct"] = a.change / a.prior.where(a.prior > 1000)
+    a = a.sort_values("latest", ascending=False).reset_index().rename(columns={"account": "name"})
+    L = acct.ledger[acct.ledger.owner == owner]
+    E = acct.erosion[acct.erosion.owner == owner]
+    top_names = a.head(top)
+    piv = d.assign(line=[f"{p} · {n[:30]}" for p, n in zip(d.provider, d.account)]).pivot_table(index="date", columns="line", values="cost_net", aggfunc="sum")
+    piv = piv.reindex(h.m.index).fillna(0.0)
+    keep = piv.sum().nlargest(top).index
+    other = piv.drop(columns=keep).sum(axis=1)
+    fig = go.Figure()
+    for col in keep:
+        fig.add_bar(x=piv.index, y=piv[col], name=col, hovertemplate="%{y:$,.0f}")
+    if other.sum() > 0:
+        fig.add_bar(x=piv.index, y=other, name="Other", marker_color="#cbd5e1", hovertemplate="%{y:$,.0f}")
+    fig.update_layout(template=TEMPLATE, barmode="stack", height=360, margin=dict(t=20, b=10), hovermode="x unified", legend=dict(font=dict(size=10)),
+                      yaxis=dict(tickformat="$.2~s"), xaxis=dict(tickformat="%b %y", dtick="M2"))
+    return dict(accounts=a, ledger=L, erosion=E, fig=fig, latest=a.latest.sum(), prior=a.prior.sum())
+
+
+def arc_lines(df: pd.DataFrame) -> list[str]:
+    """One sentence per provider: how far total spend fell from its peak, where it bottomed out and how much has come back."""
+    T = total_series(df)
+    sc = scan(T)
+    out = []
+    for (p, _), s_ in T.items():
+        r = _scan_line(s_.to_numpy(dtype=float), T.index, MATERIALITY)
+        if not r:
+            continue
+        e = r.get("erosion")
+        if e:
+            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}), fell to {money(e['trough'])}/mo by {e['trough_end']:%b %Y} "
+                       f"({1 - e['trough'] / r['peak']:.0%} lower) and is now {money(r['now'])}/mo, so **{min(e['given_back'], 9.99):.0%} of the reduction has come back**.")
+        elif "cls" in r:
+            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}) and is now {money(r['now'])}/mo ({1 - r['now'] / r['peak']:.0%} lower).")
+        elif r["now"] >= 0.95 * r["peak"]:
+            out.append(f"**{p}** is at {money(r['now'])}/mo, at or near the highest level in the history: no reduction to report at the provider level.")
+        else:
+            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}) and is now {money(r['now'])}/mo.")
+    return out

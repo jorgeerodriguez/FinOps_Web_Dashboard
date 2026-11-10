@@ -1,7 +1,7 @@
 """Explainable forecasts. Two methods, auto-picked per series by backtest:
 
   yoy     same month last year x MEDIAN of recent monthly YoY ratios (robust to one-off spikes)
-  runrate trailing 3-month average held flat (for series with <~2 years history, e.g. GCP)
+  runrate trailing 3-month average held flat (wins where the series is still ramping, e.g. GCP)
 """
 from __future__ import annotations
 import numpy as np
@@ -51,7 +51,7 @@ def backtest_mape(s: pd.Series, method: str = "yoy", n: int = 8, window: int = 6
 
 
 def pick_method(s: pd.Series, window: int = 6) -> tuple[str, float]:
-    """Best method by backtest MAPE. With ~14 months of history the backtest has only 1-2 points; if none is
+    """Best method by backtest MAPE. With about two years of history the backtest has up to 8 points; if none is
     possible, use yoy once a full year exists (needed for 'same month last year'), else runrate."""
     if len(s) < 13:
         return "runrate", float("nan")

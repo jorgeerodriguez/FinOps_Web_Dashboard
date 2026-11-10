@@ -6,6 +6,8 @@ from pathlib import Path
 import pandas as pd
 
 from . import exec_summary as es
+from . import history as hist
+from .history_report import add_overview
 from . import store
 from .config import ROOT
 from .exec_charts import entity_block
@@ -53,10 +55,20 @@ def build_report(topn: int = 8, other_by: str = "Single band") -> str:
         r.parts.append("<h3>Notes</h3>")
         r.bullets([
             f"**Budget:** {money(k.budget / 12)}/month for AWS + GCP Cloud Services ({money(k.budget)} per year); Marketplace and Tax are outside it.",
-            "**Forecast:** each provider is modelled separately (same month last year × recent growth, or a flat run-rate when history is short), "
+            "**Forecast:** each provider is modelled separately (same month last year × recent growth, or a flat run-rate, whichever backtests better), "
             "then summed. The range shown is the backtest error where it can be measured, otherwise ±15%.",
-            "**History:** the dashboard holds about 14 months of billing data, so year-over-year comparisons cover only the months that overlap.",
+            f"**History:** billed data from {k.df['date'].min():%B %Y} ({k.df['date'].nunique()} months), so year-over-year comparisons cover every month that exists in both years.",
         ])
+
+        # ---- two-year view: latest 12 months vs the 12 before (full detail in the Two-Year History report)
+        if len(df["date"].unique()) >= 24:
+            hh = hist.compute(df)
+            r.section("Two years at a glance — latest 12 months vs the 12 before", new_page=True)
+            add_overview(r, hh, compact=True)
+            fy_ = hist.fig_yoy(hh)
+            fy_.update_layout(height=220)
+            r.chart(fy_, height=220)
+            r.caption("Same month, year over year (one line per year). The Two-Year History report has the full breakdown.")
 
         # ---- pages 3-6: one block per provider / level
         for provider, level, noun in (("AWS", "service", "Service"), ("AWS", "account", "Account"),
