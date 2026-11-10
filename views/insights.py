@@ -27,8 +27,8 @@ lens = "account / project" if level == "account" else "service"
 st.sidebar.caption("The savings ledger compares each line with its own peak over the whole history. Accounts and services overlap (they are two cuts of the same dollars), so don't add the two lenses together.")
 
 h = H.compute(df)
-sc = S.scan(S.series(df, level), min_amt, S.owners_map(df, level))
-acct = sc if level == "account" else S.scan(S.series(df, "account"), min_amt, S.owners_map(df, "account"))
+sc = S.scan(S.adjusted_series(df, level), min_amt, S.owners_map(df, level))
+acct = sc if level == "account" else S.scan(S.adjusted_series(df, "account"), min_amt, S.owners_map(df, "account"))
 
 for col, it in zip(st.columns(5), S.kpis(sc, h)):
     col.metric(it["label"], it["value"], it["delta"] or None, delta_color="off", help=it.get("help") or None)
@@ -88,7 +88,8 @@ A line (an account, project or service) is compared with **its own highest 3-mon
 - **One-off** = a single month carried 70%+ of the peak window → never recurring cost, **not** a saving. **Check** = some (not all) recent months are $0 → likely billing timing, **not** a saving.
 - **Realized to date** = (peak level − actual) summed over every month since the step-down. **Per year** = the monthly drop × 12.
 - **Savings given back** = the part of an earlier reduction that has returned since the low point.
-- Savings Plans fees are excluded (billed in lumps with gaps). Cost data cannot say *why* a line fell: migration to the other cloud, a rightsizing, a contract change or a shutdown all look the same.
+- **Billing gaps are added back first**: the `add_back` rows you reviewed in `data/anomaly_rules.csv`, and Savings Plans fee-timing gaps, each filled from the line's neighbouring months, so a bill that did not arrive is never mistaken for a saving (or for savings coming back).
+- The Savings Plans service itself is not listed as a line (billed in lumps with gaps). Cost data cannot say *why* a line fell: migration to the other cloud, a rightsizing, a contract change or a shutdown all look the same.
 """)
 
 # ----------------------------------------------------------------------------- 2. owners
@@ -99,7 +100,7 @@ with tabs[1]:
                "Owners come from `data/owners_aws.csv` and `data/owners_gcp.csv`.")
     ua = sc_t.loc["(unassigned)"] if "(unassigned)" in sc_t.index else None
     if ua is not None and ua.latest > 0:
-        st.warning(f"**{money(ua.latest)}** over the last 12 months sits in {int(ua.accounts)} accounts / projects with no owner. Fill them in on Data Health's owner files.")
+        st.warning(f"**{money(ua.latest)}** over the last 12 months sits in {int(ua.accounts)} accounts / projects with no owner. Assign them under **Data Health → Owners**.")
     st.dataframe(S.scorecard_display(sc_t), hide_index=True, width="stretch")
     st.download_button("Download scorecard CSV", sc_t.round(2).to_csv().encode(), "owner_scorecard.csv", "text/csv", key="own_dl")
     show_fig(S.fig_owner_change(sc_t), width="stretch")

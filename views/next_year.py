@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+from finops import editor_ui
 from finops import history as hist
 from finops import nextyear as ny_mod
 from finops import nextyear_charts as ch
@@ -162,16 +163,9 @@ if an is not None:
     for line in nys.adjustments_lines(ny):
         st.markdown(f"- {line}")
     st.dataframe(an, hide_index=True, width="stretch")
-    with st.expander("How to record a review"):
-        st.markdown("""Edit `data/anomaly_rules.csv` (then **Reload data** / rerun):
-
-| column | meaning |
-|---|---|
-| provider, account, service | exactly as shown in the table above (account = AWS account name or GCP project name) |
-| months | the gap months as `YYYY-MM`, separated by `;` |
-| action | `add_back` (billing timing: fill the month with the line's typical value, trend only) · `confirmed_real` (a real drop, leave as is) · `pending` |
-| note | who confirmed it and why |
-""")
+st.subheader("Review anomalies")
+with st.expander("Record or change a review (saves to data/anomaly_rules.csv)", expanded=bool(an is not None and (an["Status"] == "Pending review").any())):
+    editor_ui.rules_editor(ny.anomalies)
 
 with st.expander("Method & caveats"):
     st.markdown(nys.METHOD_MD)

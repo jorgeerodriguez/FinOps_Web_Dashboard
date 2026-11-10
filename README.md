@@ -18,12 +18,12 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **AWS / GCP** | Total, by account/project, by service, owner or family; per-entity forecast and billing detail |
 | **AWS vs GCP** | Trend, share and annual totals on comparable months |
 | **Forecast & Budget** | Current-year and next-year forecasts with a what-if adjustment |
-| **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review, look-back of last year's forecast |
+| **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review with an in-app **rules editor**, look-back of last year's forecast |
 | **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, price change vs the prior 12 months, renewal watch |
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
 | **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded), **owner scorecard** with a per-owner review, plus spikes, new spend, creeping growth, ownership gaps and cost-structure checks |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
-| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps |
+| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, and an **owners editor** (assign owners to accounts / projects, including ones billing but missing from the file) |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
 print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar).
@@ -105,7 +105,8 @@ finops/
   nextyear.py nextyear_summary.py          next-year Low/Base/High, per-line model competition, anomaly rules
   marketplace.py marketplace_view.py       contract cadence -> renewal calendar
   history.py history_report.py             two-year comparison, one-off detection, forecast look-back, 'what moved' summary
-  savings.py                               savings ledger, erosion, owner scorecard
+  savings.py                               savings ledger (billing gaps added back), erosion, owner scorecard
+  editors.py editor_ui.py                  safe in-app editing of the owner files and anomaly rules (backup, atomic save, stale-file check)
   asnow.py                                 month-to-date projection
   audit.py insights.py                     orphan screening, savings signals
   exec_summary.py exec_charts.py ...       numbers/figures with NO Streamlit in them

@@ -12,6 +12,9 @@ A *saving* is a sustained step down in a line's monthly cost, measured against t
   realized  what the line would have cost had it stayed at its peak level, minus what it actually cost, since the step down
   erosion   a line that fell and then climbed back: the share of the saving that has returned
 
+Before measuring, billing gaps are added back (the reviewed `add_back` rules in anomaly_rules.csv, and Savings Plans fee-timing gaps),
+each filled from the line's own neighbouring months, so a bill that did not arrive is never mistaken for a saving or for savings coming back.
+
 Cost data only: nothing here says WHY a line fell. Every row needs its owner to confirm."""
 from __future__ import annotations
 from dataclasses import dataclass
@@ -35,6 +38,82 @@ def series(df: pd.DataFrame, level: str) -> pd.DataFrame:
     """Months x (provider, name) for every line, missing months as $0."""
     p = df.pivot_table(index="date", columns=["provider", level], values="cost_net", aggfunc="sum")
     return p.reindex(pd.date_range(df["date"].min(), df["date"].max(), freq="MS")).fillna(0.0)
+
+
+def local_gap(v: pd.Series, months: list[pd.Timestamp] | None = None, window: int = 3) -> pd.Series:
+    """$ missing from a line in months it was not billed: the median of its non-gap neighbours (+-3 months) minus what was billed.
+    months: the gap months to fill (a reviewed rule). None = detect them (a month under half its neighbours' median)."""
+    idx = list(v.index)
+    gap = pd.Series(0.0, index=v.index)
+    cand = set(months) if months is not None else set(idx)
+    for i, d in enumerate(idx):
+        if d not in cand:
+            continue
+        nb = [idx[j] for j in range(max(0, i - window), min(len(idx), i + window + 1)) if j != i and (months is None or idx[j] not in cand)]
+        if len(nb) < 2:
+            continue
+        typical = float(v.reindex(nb).median())
+        if months is not None:
+            gap[d] = max(typical - v[d], 0.0)
+        elif typical > 0 and v[d] < 0.5 * typical:
+            gap[d] = typical - v[d]
+    return gap
+
+
+def _parse_months(s: str) -> list[pd.Timestamp]:
+    return [pd.Timestamp(x.strip() + "-01") for x in str(s).split(";") if x.strip()]
+
+
+def add_backs(df: pd.DataFrame, rules: pd.DataFrame | None, idx: pd.DatetimeIndex) -> tuple[list, dict]:
+    """Billing gaps to add back before measuring savings, so a missing bill is never mistaken for a saving.
+    Returns ([(provider, account, service, gap Series)] from the reviewed rules, {provider: (SP gap Series, SP share by account)})."""
+    from .nextyear import SP_NAME, load_rules
+    rules = load_rules() if rules is None else rules
+    out = []
+    for r in rules[rules["action"].str.strip().str.lower() == "add_back"].itertuples():
+        v = df[(df.provider == r.provider) & (df.account == r.account) & (df.service == r.service)].groupby("date").cost_net.sum().reindex(idx).fillna(0.0)
+        g = local_gap(v, _parse_months(r.months))
+        if g.sum() > 0:
+            out.append((r.provider, r.account, r.service, g))
+    sp = {}
+    for p in df.provider.unique():
+        d = df[(df.provider == p) & (df.service == SP_NAME)]
+        if d.empty:
+            continue
+        v = d.groupby("date").cost_net.sum().reindex(idx).fillna(0.0)
+        g = local_gap(v, None)
+        if g.sum() > 0:
+            share = d.groupby("account").cost_net.sum()
+            sp[p] = (g, share / share.sum() if share.sum() > 0 else share)
+    return out, sp
+
+
+def adjusted_series(df: pd.DataFrame, level: str, rules: pd.DataFrame | None = None) -> pd.DataFrame:
+    """series() with reviewed billing gaps and Savings Plans fee-timing gaps added back."""
+    S = series(df, level)
+    gaps, sp = add_backs(df, rules, S.index)
+    for p, a, sv, g in gaps:
+        col = (p, a if level == "account" else sv)
+        if col in S.columns:
+            S[col] = S[col] + g
+    if level == "account":
+        for p, (g, share) in sp.items():
+            for acc, sh in share.items():
+                if (p, acc) in S.columns:
+                    S[(p, acc)] = S[(p, acc)] + g * sh
+    return S
+
+
+def adjusted_totals(df: pd.DataFrame, rules: pd.DataFrame | None = None) -> pd.DataFrame:
+    T = total_series(df)
+    gaps, sp = add_backs(df, rules, T.index)
+    for p, a, sv, g in gaps:
+        if (p, "All") in T.columns:
+            T[(p, "All")] = T[(p, "All")] + g
+    for p, (g, share) in sp.items():
+        if (p, "All") in T.columns:
+            T[(p, "All")] = T[(p, "All")] + g
+    return T
 
 
 def total_series(df: pd.DataFrame) -> pd.DataFrame:
@@ -75,8 +154,10 @@ def _scan_line(v: np.ndarray, idx: pd.DatetimeIndex, mat: float):
     if len(tr) and np.isfinite(tr).any() and not isolated:
         j = int(np.nanargmin(np.where(np.isfinite(tr), tr, np.inf)))
         trough, i_tr = float(tr[j]), i_pk + 1 + j
+        info = dict(trough=trough, trough_end=idx[i_tr], given_back=(now - trough) / (peak - trough) if peak > trough else 0.0)
+        out["trough_info"] = info                                  # always kept: the provider summary reports it with a gentler threshold
         if peak - trough >= mat and now - trough >= mat and now >= 1.15 * trough:
-            out["erosion"] = dict(trough=trough, trough_end=idx[i_tr], given_back=(now - trough) / (peak - trough))
+            out["erosion"] = info
     # ---- ledger
     drop = peak - now
     if drop >= mat and now <= 0.85 * peak and last3.max() < 0.95 * peak:
@@ -201,7 +282,7 @@ def fig_top(sc: Scan, n: int = 12) -> go.Figure:
 
 def fig_arc(df: pd.DataFrame) -> go.Figure:
     """Each provider's 3-month average over the whole history: where it peaked, where it fell to, where it is now."""
-    T = total_series(df)
+    T = adjusted_totals(df)
     fig = go.Figure()
     for (p, _), s in T.items():
         r = s.rolling(3).mean()
@@ -326,22 +407,20 @@ def owner_detail(df: pd.DataFrame, h: History, owner: str, acct: Scan, top: int 
 
 
 def arc_lines(df: pd.DataFrame) -> list[str]:
-    """One sentence per provider: how far total spend fell from its peak, where it bottomed out and how much has come back."""
-    T = total_series(df)
-    sc = scan(T)
+    """One sentence per provider: how far total spend fell from its peak, where it bottomed out and how much has come back.
+    Uses totals with billing gaps added back, so a missing bill is not read as a low point."""
+    T = adjusted_totals(df)
     out = []
     for (p, _), s_ in T.items():
         r = _scan_line(s_.to_numpy(dtype=float), T.index, MATERIALITY)
         if not r:
             continue
-        e = r.get("erosion")
-        if e:
-            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}), fell to {money(e['trough'])}/mo by {e['trough_end']:%b %Y} "
-                       f"({1 - e['trough'] / r['peak']:.0%} lower) and is now {money(r['now'])}/mo, so **{min(e['given_back'], 9.99):.0%} of the reduction has come back**.")
-        elif "cls" in r:
-            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}) and is now {money(r['now'])}/mo ({1 - r['now'] / r['peak']:.0%} lower).")
+        t = r.get("trough_info")
+        if t and r["peak"] - t["trough"] >= MATERIALITY and r["now"] > 1.02 * t["trough"] and t["trough"] < 0.95 * r["peak"]:
+            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}), fell to {money(t['trough'])}/mo by {t['trough_end']:%b %Y} "
+                       f"({1 - t['trough'] / r['peak']:.0%} lower) and is now {money(r['now'])}/mo, so **{min(t['given_back'], 9.99):.0%} of the reduction has come back**.")
         elif r["now"] >= 0.95 * r["peak"]:
             out.append(f"**{p}** is at {money(r['now'])}/mo, at or near the highest level in the history: no reduction to report at the provider level.")
         else:
-            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}) and is now {money(r['now'])}/mo.")
+            out.append(f"**{p}** averaged {money(r['peak'])}/mo at its peak ({r['peak_window']}) and is now {money(r['now'])}/mo ({1 - r['now'] / r['peak']:.0%} lower).")
     return out

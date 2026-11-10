@@ -339,7 +339,8 @@ def find_anomalies(rows: pd.DataFrame, basis: pd.DatetimeIndex, rules: pd.DataFr
             status = "Pending review"
         low = ser[low_mask]
         out.append({"Provider": p, "Account / Project": a, "Service": _short(sv, 36), "Type": kind, "Status": status, "Typical /mo": typical,
-                    "Months near $0": ", ".join(low.index.strftime("%b %y")), "Missing vs typical": (typical - low).sum()})
+                    "Months near $0": ", ".join(low.index.strftime("%b %y")), "Missing vs typical": (typical - low).sum(),
+                    "_service": sv, "_months": ";".join(low.index.strftime("%Y-%m"))})
     return pd.DataFrame(out).sort_values("Missing vs typical", ascending=False).reset_index(drop=True) if out else pd.DataFrame()
 
 

@@ -110,3 +110,48 @@ def test_displays_do_not_crash(cloud):
     S.fig_arc(cloud)
     t = S.owner_scorecard(cloud, h, acct)
     S.scorecard_display(t), S.fig_owner_change(t), S.owner_detail(cloud, h, "Alice", acct)
+
+
+# ------------------------------------------------------------------ billing gaps must not look like savings
+RULE_COLS = ["provider", "account", "service", "months", "action", "note"]
+
+
+def _line_df(values, account="Acct-Gap", service="Amazon Relational Database Service"):
+    return pd.DataFrame([dict(date=d, provider="AWS", account=account, service=service, category="Cloud Services", env="unknown", cost_gross=v, credits=0.0,
+                              cost_net=v, owner="Alice", family="g", is_partial=False) for d, v in zip(IDX, values)])
+
+
+def test_local_gap_fills_from_neighbours():
+    v = pd.Series([100.0] * 10, index=IDX[:10])
+    v.iloc[4:6] = 0.0
+    g = S.local_gap(v, [IDX[4], IDX[5]])
+    assert g.iloc[4] == 100 and g.iloc[5] == 100 and g.sum() == 200                 # neighbours are non-gap months only
+    auto = S.local_gap(v, None)
+    assert auto.sum() == 200                                                        # detected without being told
+
+
+def test_a_billing_gap_reads_as_savings_coming_back_until_it_is_reviewed():
+    values = [30_000.0] * 27
+    values[17] = values[18] = 0.0
+    df = _line_df(values)
+    raw = S.scan(S.series(df, "account"))
+    assert len(raw.erosion) == 1 and raw.erosion.iloc[0].given_back == pytest.approx(1.0)          # the false signal
+    rule = pd.DataFrame([dict(provider="AWS", account="Acct-Gap", service="Amazon Relational Database Service",
+                              months=f"{IDX[17]:%Y-%m};{IDX[18]:%Y-%m}", action="add_back", note="")])
+    fixed = S.scan(S.adjusted_series(df, "account", rule))
+    assert fixed.erosion.empty and fixed.ledger.empty
+    only_pending = rule.assign(action="pending")
+    assert len(S.scan(S.adjusted_series(df, "account", only_pending)).erosion) == 1               # only add_back rows adjust anything
+
+
+def test_savings_plan_fee_timing_gaps_are_added_back_at_account_level(cloud):
+    empty = pd.DataFrame(columns=RULE_COLS)
+    raw = S.series(cloud, "account")[("AWS", "Acct-Steady")]
+    adj = S.adjusted_series(cloud, "account", empty)[("AWS", "Acct-Steady")]
+    assert raw.min() == 50_000 and adj.min() == pytest.approx(55_000) and adj.max() == pytest.approx(55_000)
+
+
+def test_provider_totals_are_gap_adjusted_too(cloud):
+    empty = pd.DataFrame(columns=RULE_COLS)
+    raw, adj = S.total_series(cloud)[("AWS", "All")], S.adjusted_totals(cloud, empty)[("AWS", "All")]
+    assert adj.sum() == pytest.approx(raw.sum() + 3 * 5_000)                       # three missing $5K Savings Plans bills

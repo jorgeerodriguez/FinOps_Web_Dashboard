@@ -188,7 +188,7 @@ def anomalies_display(ny: NextYear) -> pd.DataFrame | None:
     an = ny.anomalies
     if an is None or not len(an):
         return None
-    an = an.assign(_p=an["Status"].ne("Pending review")).sort_values(["_p", "Missing vs typical"], ascending=[True, False]).drop(columns="_p")
+    an = an.assign(_p=an["Status"].ne("Pending review")).sort_values(["_p", "Missing vs typical"], ascending=[True, False]).drop(columns=["_p", "_service", "_months"], errors="ignore")
     return an.assign(**{"Typical /mo": an["Typical /mo"].map(money), "Missing vs typical": an["Missing vs typical"].map(money)})
 
 

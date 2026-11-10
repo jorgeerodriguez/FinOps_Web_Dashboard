@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from finops import store
+from finops import editor_ui, store
 from finops.ui import get_data, money
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -57,3 +57,7 @@ part = df[df.is_partial]
 if len(part):
     st.warning(f"Contains in-progress month(s) (as-now): {', '.join(sorted({f'{d:%b %Y}' for d in part.date}))} — "
                "excluded from billed views until 'as-now' mode is wired in.")
+
+# ---------------------------------------------------------------- owners
+st.subheader("Owners — who owns each account / project")
+editor_ui.owners_editor(df)
