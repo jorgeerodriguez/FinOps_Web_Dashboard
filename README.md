@@ -23,7 +23,7 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
 | **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded), **owner scorecard** with a per-owner review, plus spikes, new spend, creeping growth, ownership gaps and cost-structure checks |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
-| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, and an **owners editor** (assign owners to accounts / projects, including ones billing but missing from the file) |
+| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, and tag coverage |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
 print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar).
@@ -68,6 +68,7 @@ gcloud auth application-default login
 python -m ingest.run --provider gcp
 
 python -m ingest.run --provider all      # both; default window = `history_months` (27) incl. the in-progress month
+python -m ingest.run --provider gcp --tags-only   # only the cloud tag / label tables (no billing pull); --no-tags skips them
 ```
 
 ## Data and configuration
@@ -81,6 +82,7 @@ python -m ingest.run --provider all      # both; default window = `history_month
 | `[data]` | Data folder and refresh window (`history_months`, 27 by default = two full years plus the current one. AWS Cost Explorer keeps only ~14 months unless *multi-year data at monthly granularity* is enabled in Cost Management preferences; GCP goes back as far as the billing export was on) |
 | `[aws]`, `[gcp]` | SSO start URL, payer (management) account, GCP billing project and BigQuery export table |
 | `[owners]` | Paths to `owners_aws.csv` / `owners_gcp.csv` |
+| `[tags]` | Which cloud tags / labels to pull (`aws = "active"` or a list, `gcp = "auto"` or a list, `months`, `exclude` patterns) and `[tags.map]`: which tag key feeds `cost_center` / `project_code` |
 | `[audit]` | Audit folder, GCP project list, idle threshold, notes to hide |
 
 Files under `data/` (all git-ignored; see `examples/` for the shape):
@@ -89,7 +91,8 @@ Files under `data/` (all git-ignored; see `examples/` for the shape):
 |---|---|
 | `billing.parquet` | Normalized store: date, provider, account, service, category, owner, family, gross/credits/net, `is_partial` |
 | `refresh_log.csv` | Who refreshed what, and when |
-| `owners_aws.csv`, `owners_gcp.csv` | Owner / family / department per account or project (edit freely; **Reload data** after) |
+| `owners_aws.csv`, `owners_gcp.csv` | Owner / family / department per account or project, plus the Finance columns `cost_center`, `project_code`, `treatment` (Opex · Capex-eligible · Prepaid) and `finance_notes`. Edit in **Data Health** or in any spreadsheet |
+| `tags_accounts.csv`, `tags_values.csv`, `tags_catalog.csv` | Read-only cloud tag snapshot per account / project (last 3 billed months), refreshed with the tag buttons. Never overwrites what you typed in the owner files |
 | `anomaly_rules.csv` | Reviewed billing gaps: `add_back` · `confirmed_real` · `pending`, with a note |
 | `orphans_gcp.txt` | GCP projects (names or IDs) for the deep audit |
 | `audits/` | Saved deep-audit results |
@@ -107,6 +110,7 @@ finops/
   history.py history_report.py             two-year comparison, one-off detection, forecast look-back, 'what moved' summary
   savings.py                               savings ledger (billing gaps added back), erosion, owner scorecard
   editors.py editor_ui.py                  safe in-app editing of the owner files and anomaly rules (backup, atomic save, stale-file check)
+  tags.py                                  cloud tags / labels per account: key selection, dominant value + coverage, comparison with the owner file
   asnow.py                                 month-to-date projection
   audit.py insights.py                     orphan screening, savings signals
   exec_summary.py exec_charts.py ...       numbers/figures with NO Streamlit in them
@@ -150,14 +154,26 @@ Calls your role cannot make are noted on the page and skipped; statuses fall bac
 
 ```bash
 pip install -r requirements-dev.txt     # app + pytest
-python -m pytest                        # ~7 s: unit tests of the calculation layer + a smoke test of every page and report
+python -m pytest                        # ~8 s: unit tests of the calculation layer + a smoke test of every page and report
 ```
 
 - Tests run on **synthetic data only** (`tests/synth.py`), through `FINOPS_CONFIG`, so they never read your `config.toml` or `data/`.
-  They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the month-to-date
+  They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the cloud-tag tables and editors, the month-to-date
   projection, the store, every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
 - `requirements.txt` holds compatible ranges (the major versions tested); `requirements.lock` holds the exact versions
   (`pip install -r requirements.lock` for a reproducible install). Raise a cap only after the tests pass on the new major.
+
+### Cloud tags and Finance codes
+
+Data Health shows what AWS (cost allocation tags) and GCP (project and resource labels) already say about each account / project, read-only,
+next to the columns you type. A **Tag check** column flags rows where your `cost_center` / `project_code` is empty or differs from the cloud tag,
+and an optional pre-fill copies the cloud value into *empty* cells only (nothing is saved until you click Save). Coverage per Finance field and a
+catalog of every tag key found are below the editor. Notes:
+
+- AWS can only report a tag that is **active** in Billing → Cost allocation tags (activation is not retroactive). Inactive keys are listed in the catalog with that reason.
+- AWS tags sit on resources, so an account can have several values: the table shows the one with the most spend, `+N` when more exist and `· 13%` when only part of the spend carries the tag.
+- GCP uses the project label, falling back to resource labels. Reseller / Marketplace spend carries no labels, so it lowers coverage.
+- Tag values can be Finance codes: they stay in the git-ignored `data/` folder. `treatment` is a note for Finance, not used in any calculation yet.
 
 ## Known limitations
 
@@ -169,4 +185,4 @@ python -m pytest                        # ~7 s: unit tests of the calculation la
 
 ## Roadmap
 
-Daily-grain as-now data (burn chart), opportunity detectors from the 12-month trends (steady always-on spend as commitment candidates, non-prod that is not shrinking, GCP credits ending), a printable review pack per owner, idle-resource signals (needs usage data such as AWS Compute Optimizer or GCP Recommender), authentication for shared hosting, and a scheduled monthly report.
+Daily-grain as-now data (burn chart), opportunity detectors from the 12-month trends (steady always-on spend as commitment candidates, non-prod that is not shrinking, GCP credits ending), a printable review pack per owner, tags and `NetAmortizedCost` feeding a Capex / Opex view once Finance confirms the basis, idle-resource signals (needs usage data such as AWS Compute Optimizer or GCP Recommender), authentication for shared hosting, and a scheduled monthly report.
