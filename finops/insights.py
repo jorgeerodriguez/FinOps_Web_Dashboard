@@ -29,7 +29,22 @@ def anomalies(monthly_total: pd.Series, window: int = 6, z: float = 2.0) -> pd.D
 # Detectors (rule-based and explainable; "spend at stake" is the amount in question, NOT a savings claim)
 # ----------------------------------------------------------------------------------------------
 def _pivot(df: pd.DataFrame, level: str) -> pd.DataFrame:
+    """A project code is one line across both clouds (provider shows as 'All clouds')."""
+    from .savings import ALL, CROSS
+    if level in CROSS:
+        df = df.assign(provider=ALL)
     return df.pivot_table(index=["provider", level], columns="date", values="cost_net", aggfunc="sum", fill_value=0.0)
+
+
+def add_notes(t: pd.DataFrame, df: pd.DataFrame, level: str) -> pd.DataFrame:
+    """A 'What it is' column from the finance notes of the owner files (account lens and project-code lens)."""
+    if t.empty or level not in ("account", "project_code") or "finance_notes" not in df:
+        return t
+    from . import dims as D
+    cur = df[df["date"] > df["date"].max() - pd.DateOffset(months=12)]
+    out = t.copy()
+    out["What it is"] = out[level].map(D._notes(cur, level)).fillna("")
+    return out
 
 
 def _window(p: pd.DataFrame, month: pd.Timestamp, start_back: int, end_back: int) -> pd.DataFrame:

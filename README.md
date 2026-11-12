@@ -21,7 +21,7 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review with an in-app **rules editor**, look-back of last year's forecast |
 | **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, price change vs the prior 12 months, renewal watch |
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
-| **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded), **owner scorecard** with a per-owner review, plus spikes, new spend, creeping growth, ownership gaps and cost-structure checks |
+| **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded) on an account, service or **project-code** lens, with where the savings landed by project code / environment / cost center; **scorecard** by owner, project code or cost center with a per-group review and a printable **review pack**; **opportunities** (non-prod as big as prod, steady always-on lines, credits); spikes, new spend and creeping growth with finance notes; ownership and **Finance gaps** |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
 | **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, and tag coverage |
 
@@ -172,6 +172,14 @@ Values are tidied on the way in: spacing and case are ignored (the most common s
 blanks and placeholders (`TBD`, `placeholder` ...) count as not filled in, and `nonprod` / `Non Prod` become `non-prod`. The provider pages, the Executive Summary and the
 *Projects & Environments* HTML report show project-code trends with year-over-year change, prod vs non-prod (and where non-prod is growing), projects that bill on both clouds,
 and a Finance-readiness table (share of spend that carries each code). The treemap gives every project code its own color (lighter tiles = its AWS accounts, lighter still = GCP) and folds small accounts into one tile so labels stay readable in light and dark mode. The owners editor in Data Health can show only the rows still missing an owner, a project code or an environment.
+
+### Insights with project codes
+
+The **project-code lens** treats everything with the same code as one line across AWS and GCP, so spend moved between a project's accounts (or between clouds) nets out instead of
+reading as a saving on one line and new spend on another. The ledger, scorecard and review pack can be read per owner, project code or cost center; the *Opportunities* tab lists
+**leads, not savings** (billing data cannot see utilization or existing reservations): project codes whose non-prod spend is at least their prod spend, lines that billed steadily
+for 12 months (commitment candidates, to be checked against existing coverage), and credit trends. *Finance gaps* lists the biggest spend still missing an environment,
+project code or cost center.
 
 ### Cloud tags and Finance codes
 

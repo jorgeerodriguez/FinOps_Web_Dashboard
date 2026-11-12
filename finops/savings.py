@@ -34,10 +34,26 @@ CLASS_HELP = {"Reduced": "Still running, costs less: a saving", "Ended": "Near z
 
 
 # --------------------------------------------------------------------------------------- series
+ALL = "All clouds"                     # provider label of a line that spans both clouds (the project-code lens)
+CROSS = {"project_code"}               # lenses whose lines are not tied to one provider
+
+
 def series(df: pd.DataFrame, level: str) -> pd.DataFrame:
-    """Months x (provider, name) for every line, missing months as $0."""
-    p = df.pivot_table(index="date", columns=["provider", level], values="cost_net", aggfunc="sum")
+    """Months x (provider, name) for every line, missing months as $0. A project code is ONE line across both clouds, so moving spend
+    between its accounts (or between AWS and GCP) nets out instead of reading as a saving on one line and new spend on another."""
+    if level in CROSS:
+        p = df.pivot_table(index="date", columns=level, values="cost_net", aggfunc="sum")
+        p.columns = pd.MultiIndex.from_product([[ALL], p.columns])
+    else:
+        p = df.pivot_table(index="date", columns=["provider", level], values="cost_net", aggfunc="sum")
     return p.reindex(pd.date_range(df["date"].min(), df["date"].max(), freq="MS")).fillna(0.0)
+
+
+def dim_of(df: pd.DataFrame, col: str) -> dict:
+    """(provider, account) -> the value of `col` carrying most of that account's last 12 months."""
+    d = df[df.date > df.date.max() - pd.DateOffset(months=12)]
+    g = d.groupby(["provider", "account", col]).cost_net.sum().reset_index().sort_values("cost_net", ascending=False).drop_duplicates(["provider", "account"])
+    return {(r.provider, r.account): getattr(r, col) for r in g.itertuples()}
 
 
 def local_gap(v: pd.Series, months: list[pd.Timestamp] | None = None, window: int = 3) -> pd.Series:
@@ -92,15 +108,17 @@ def adjusted_series(df: pd.DataFrame, level: str, rules: pd.DataFrame | None = N
     """series() with reviewed billing gaps and Savings Plans fee-timing gaps added back."""
     S = series(df, level)
     gaps, sp = add_backs(df, rules, S.index)
+    code_of = dim_of(df, level) if level in CROSS else {}
     for p, a, sv, g in gaps:
-        col = (p, a if level == "account" else sv)
+        col = (ALL, code_of.get((p, a))) if level in CROSS else (p, a if level == "account" else sv)
         if col in S.columns:
             S[col] = S[col] + g
-    if level == "account":
+    if level == "account" or level in CROSS:
         for p, (g, share) in sp.items():
             for acc, sh in share.items():
-                if (p, acc) in S.columns:
-                    S[(p, acc)] = S[(p, acc)] + g * sh
+                col = (ALL, code_of.get((p, acc))) if level in CROSS else (p, acc)
+                if col in S.columns:
+                    S[col] = S[col] + g * sh
     return S
 
 
@@ -205,11 +223,30 @@ def scan(S: pd.DataFrame, mat: float = MATERIALITY, owners: dict | None = None, 
 
 def owners_map(df: pd.DataFrame, level: str = "account") -> dict:
     """(provider, account) -> the owner carrying most of its recent spend (blank when unassigned)."""
+    if level in CROSS and "owner" in df:
+        d = df[df.date > df.date.max() - pd.DateOffset(months=12)]
+        g = d.groupby([level, "owner"]).cost_net.sum().reset_index().sort_values("cost_net", ascending=False).drop_duplicates(level)
+        return {(ALL, getattr(r, level)): ("" if r.owner == "(unassigned)" else r.owner) for r in g.itertuples()}
     if level != "account" or "owner" not in df:
         return {}
     d = df[df.date > df.date.max() - pd.DateOffset(months=12)]
     g = d.groupby(["provider", "account", "owner"]).cost_net.sum().reset_index().sort_values("cost_net", ascending=False).drop_duplicates(["provider", "account"])
     return {(r.provider, r.account): ("" if r.owner == "(unassigned)" else r.owner) for r in g.itertuples()}
+
+
+def annotate(sc: Scan, df: pd.DataFrame, level: str) -> Scan:
+    """Add project_code / environment / cost_center to the ledger and erosion rows (account lens), or project_code (project-code lens)."""
+    out = []
+    for t in (sc.ledger, sc.erosion):
+        t = t.copy()
+        if level == "account":
+            for col in ("project_code", "environment", "cost_center"):
+                m = dim_of(df, col)
+                t[col] = [m.get((p, n), "") for p, n in zip(t.provider, t.name)]
+        elif level in CROSS:
+            t[level] = t["name"]
+        out.append(t)
+    return Scan(out[0], out[1], sc.avoided, sc.materiality)
 
 
 # --------------------------------------------------------------------------------------- headline numbers and words
@@ -304,10 +341,19 @@ def fig_arc(df: pd.DataFrame) -> go.Figure:
 
 
 # --------------------------------------------------------------------------------------- tables
+def _dim_cols(out: pd.DataFrame, L: pd.DataFrame) -> pd.DataFrame:
+    for col, label in (("project_code", "Project code"), ("environment", "Environment"), ("cost_center", "Cost center")):
+        if col in L and not (col == "project_code" and "name" in L and (L[col] == L["name"]).all()):
+            out[label] = L[col].values
+    return out
+
+
 def ledger_display(L: pd.DataFrame) -> pd.DataFrame:
     if L.empty:
         return L
-    return pd.DataFrame({"Provider": L.provider, "Line": L.name.str.slice(0, 46), "Owner": L.owner, "Type": L.cls, "Peak /mo": L.peak.map(money),
+    out = pd.DataFrame({"Provider": L.provider, "Line": L.name.str.slice(0, 46), "Owner": L.owner})
+    out = _dim_cols(out, L)
+    return out.assign(**{"Type": L.cls, "Peak /mo": L.peak.map(money),
                          "Peak window": L.peak_window, "Now /mo": L.now.map(money), "Lower by /mo": L["lower"].map(money), "%": L.pct.map(lambda v: f"-{v:.0%}"),
                          "Since": L.since.dt.strftime("%b %Y"), "Realized to date": L.realized.map(money),
                          "Per year": [money(a) if c in ("Reduced", "Ended") else "–" for a, c in zip(L.annualized, L.cls)]})
@@ -322,27 +368,34 @@ def erosion_display(E: pd.DataFrame) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------------------- owner scorecard
-def owner_scorecard(df: pd.DataFrame, h: History, acct: Scan) -> pd.DataFrame:
-    """One row per owner: spend, change vs the 12 months before, run-rate, savings and what is rising or falling."""
-    d = df.assign(owner=df["owner"].where(df["owner"] != "(unassigned)", "(unassigned)"))
+BY_LABEL = {"owner": "Owner", "project_code": "Project code", "cost_center": "Cost center"}
+BY_MISSING = {"owner": "(unassigned)", "project_code": "(no project code)", "cost_center": "(no cost center)"}
+
+
+def owner_scorecard(df: pd.DataFrame, h: History, acct: Scan, by: str = "owner") -> pd.DataFrame:
+    """One row per owner (or project code / cost center): spend, change vs the 12 months before, run-rate, savings and what is rising or falling.
+    acct = the account-lens scan, annotated (savings are credited to the group each account belongs to)."""
+    d = df
     cur, prev = d[d.date.isin(h.cur)], d[d.date.isin(h.prev)] if h.has_prev else d.iloc[0:0]
-    c, p = cur.groupby("owner").cost_net.sum(), prev.groupby("owner").cost_net.sum()
-    last3 = d[d.date.isin(h.m.index[-3:])].groupby("owner").cost_net.sum() / 3
-    ly3 = d[d.date.isin(h.m.index[-3:] - pd.DateOffset(years=1))].groupby("owner").cost_net.sum() / 3
+    c, p = cur.groupby(by).cost_net.sum(), prev.groupby(by).cost_net.sum()
+    last3 = d[d.date.isin(h.m.index[-3:])].groupby(by).cost_net.sum() / 3
+    ly3 = d[d.date.isin(h.m.index[-3:] - pd.DateOffset(years=1))].groupby(by).cost_net.sum() / 3
     t = pd.DataFrame({"latest": c, "prior": p, "exit": last3, "exit_ly": ly3}).fillna(0.0)
     t["change"] = t.latest - t.prior
     t["pct"] = t.change / t.prior.where(t.prior > 1000)
     t["share"] = t.latest / t.latest.sum()
-    t["accounts"] = cur[cur.cost_net > 0].groupby("owner").account.nunique()
+    t["accounts"] = cur[cur.cost_net > 0].groupby(by).account.nunique()
     L, E = acct.ledger, acct.erosion
-    red = L[L.cls == "Reduced"].groupby("owner")
+    if by not in L:
+        L, E = L.assign(**{by: ""}), E.assign(**{by: ""})
+    red = L[L.cls == "Reduced"].groupby(by)
     t["saving_mo"] = red["lower"].sum()
     t["realized"] = red["realized"].sum()
-    t["ended_mo"] = L[L.cls == "Ended"].groupby("owner")["lower"].sum()
-    t["given_back_mo"] = E.groupby("owner").regrown.sum()
-    # biggest rising / falling account per owner (latest 12 vs prior 12)
-    a = pd.DataFrame({"latest": cur.groupby(["owner", "provider", "account"]).cost_net.sum(),
-                      "prior": prev.groupby(["owner", "provider", "account"]).cost_net.sum()}).fillna(0.0)
+    t["ended_mo"] = L[L.cls == "Ended"].groupby(by)["lower"].sum()
+    t["given_back_mo"] = E.groupby(by).regrown.sum()
+    # biggest rising / falling account per group (latest 12 vs prior 12)
+    a = pd.DataFrame({"latest": cur.groupby([by, "provider", "account"]).cost_net.sum(),
+                      "prior": prev.groupby([by, "provider", "account"]).cost_net.sum()}).fillna(0.0)
     a["chg"] = a.latest - a.prior
     up, dn = {}, {}
     for o, g in a.groupby(level=0):
@@ -356,12 +409,13 @@ def owner_scorecard(df: pd.DataFrame, h: History, acct: Scan) -> pd.DataFrame:
     t["biggest_rise"], t["biggest_fall"] = pd.Series(up), pd.Series(dn)
     t = t[(t.latest.abs() + t.prior.abs()) > 0]
     t[["saving_mo", "realized", "ended_mo", "given_back_mo"]] = t[["saving_mo", "realized", "ended_mo", "given_back_mo"]].fillna(0.0)
+    t.index.name = by
     return t.sort_values("latest", ascending=False)
 
 
 def scorecard_display(t: pd.DataFrame) -> pd.DataFrame:
     sg = lambda v: ("+" if v > 0 else "") + money(v)
-    return pd.DataFrame({"Owner": t.index, "Accounts / projects": t.accounts.fillna(0).astype(int).values, "Latest 12 mo": t.latest.map(money).values,
+    return pd.DataFrame({BY_LABEL.get(t.index.name, "Owner"): t.index, "Accounts / projects": t.accounts.fillna(0).astype(int).values, "Latest 12 mo": t.latest.map(money).values,
                          "Share": t.share.map(lambda v: f"{v:.0%}").values, "Prior 12 mo": t.prior.map(money).values, "Change": t.change.map(sg).values,
                          "%": t.pct.map(lambda v: "–" if pd.isna(v) else (f"{1 + v:.0f}×" if v >= 3 else f"{v:+.0%}")).values,
                          "Exit run-rate /mo": t.exit.map(money).values, "Savings /mo": t.saving_mo.map(money).values, "Realized": t.realized.map(money).values,
@@ -381,16 +435,17 @@ def fig_owner_change(t: pd.DataFrame, n: int = 14) -> go.Figure:
     return fig
 
 
-def owner_detail(df: pd.DataFrame, h: History, owner: str, acct: Scan, top: int = 8) -> dict:
-    """Everything for one owner's review: monthly chart, account table, savings, erosion, rising lines."""
-    d = df[df.owner == owner]
+def owner_detail(df: pd.DataFrame, h: History, owner: str, acct: Scan, top: int = 8, by: str = "owner") -> dict:
+    """Everything for one owner's (or project code's / cost center's) review: monthly chart, account table, savings, erosion, rising lines, finance notes."""
+    d = df[df[by] == owner]
     cur, prev = d[d.date.isin(h.cur)], d[d.date.isin(h.prev)]
     a = pd.DataFrame({"latest": cur.groupby(["provider", "account"]).cost_net.sum(), "prior": prev.groupby(["provider", "account"]).cost_net.sum()}).fillna(0.0)
     a["change"] = a.latest - a.prior
     a["pct"] = a.change / a.prior.where(a.prior > 1000)
     a = a.sort_values("latest", ascending=False).reset_index().rename(columns={"account": "name"})
-    L = acct.ledger[acct.ledger.owner == owner]
-    E = acct.erosion[acct.erosion.owner == owner]
+    L = acct.ledger[acct.ledger[by] == owner] if by in acct.ledger else acct.ledger.iloc[0:0]
+    E = acct.erosion[acct.erosion[by] == owner] if by in acct.erosion else acct.erosion.iloc[0:0]
+    notes = list(dict.fromkeys(x for x in cur["finance_notes"] if x)) if "finance_notes" in cur else []
     top_names = a.head(top)
     piv = d.assign(line=[f"{p} · {n[:30]}" for p, n in zip(d.provider, d.account)]).pivot_table(index="date", columns="line", values="cost_net", aggfunc="sum")
     piv = piv.reindex(h.m.index).fillna(0.0)
@@ -403,7 +458,26 @@ def owner_detail(df: pd.DataFrame, h: History, owner: str, acct: Scan, top: int 
         fig.add_bar(x=piv.index, y=other, name="Other", marker_color="#cbd5e1", hovertemplate="%{y:$,.0f}")
     fig.update_layout(template=TEMPLATE, barmode="stack", height=360, margin=dict(t=20, b=10), hovermode="x unified", legend=dict(font=dict(size=10)),
                       yaxis=dict(tickformat="$.2~s"), xaxis=dict(tickformat="%b %y", dtick="M2"))
-    return dict(accounts=a, ledger=L, erosion=E, fig=fig, latest=a.latest.sum(), prior=a.prior.sum())
+    return dict(accounts=a, ledger=L, erosion=E, fig=fig, latest=a.latest.sum(), prior=a.prior.sum(), notes=notes)
+
+
+def landed(ledger: pd.DataFrame, by: str) -> pd.DataFrame:
+    """Where the (reduced-line) savings landed: run-rate and realized to date per project code / environment / cost center. Needs an annotated ledger."""
+    if by not in ledger:
+        return pd.DataFrame(columns=["lower", "realized", "lines"])
+    r = ledger[ledger.cls == "Reduced"]
+    g = r.groupby(by).agg(lower=("lower", "sum"), realized=("realized", "sum"), lines=("name", "size"))
+    return g.sort_values("realized", ascending=False)
+
+
+def fig_landed(t: pd.DataFrame, title: str, n: int = 10) -> go.Figure:
+    d = t.head(n).iloc[::-1]
+    fig = go.Figure(go.Bar(x=d.realized, y=d.index.astype(str), orientation="h", marker_color=CLASS_COLOR["Reduced"], cliponaxis=False,
+                           text=[f"{money(r)}  ({money(m)}/mo)" for r, m in zip(d.realized, d["lower"])], textposition="outside",
+                           hovertemplate="%{y}<br>%{x:$,.0f} realized to date<extra></extra>"))
+    fig.update_layout(template=TEMPLATE, title=title, height=max(240, 26 * len(d) + 90), margin=dict(t=40, b=10, l=10, r=120), xaxis=dict(tickformat="$.2~s"), yaxis=dict(automargin=True))
+    fig.update_xaxes(range=[0, max(d.realized.max(), 1) * 1.45] if len(d) else None)
+    return fig
 
 
 def arc_lines(df: pd.DataFrame) -> list[str]:
