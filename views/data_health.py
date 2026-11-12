@@ -16,14 +16,19 @@ st.caption("Runs on this machine with **your own** credentials — AWS SSO sign-
            "`gcloud auth application-default login`. Nothing is stored by the dashboard.")
 c1, c2, c3 = st.columns([1, 1, 2])
 profile = c3.text_input("AWS profile (optional — blank = SSO browser login)", value="")
-choice = None
+choice, tags_only = None, False
 if c1.button("Refresh AWS"):
     choice = "aws"
 if c2.button("Refresh GCP"):
     choice = "gcp"
+t1, t2, _ = st.columns([1, 1, 2])
+if t1.button("Refresh AWS tags", help="Only the cost allocation tag tables (a few cents of Cost Explorer calls). Billing data is not re-pulled."):
+    choice, tags_only = "aws", True
+if t2.button("Refresh GCP tags", help="Only the label tables (reads about 25 GB of the billing export, a few cents). Billing data is not re-pulled."):
+    choice, tags_only = "gcp", True
 if choice:
-    cmd = [sys.executable, "-u", "-m", "ingest.run", "--provider", choice] + (["--profile", profile] if profile and choice == "aws" else [])
-    with st.status(f"Refreshing {choice.upper()}…", expanded=True) as status:
+    cmd = [sys.executable, "-u", "-m", "ingest.run", "--provider", choice] + (["--profile", profile] if profile and choice == "aws" else []) + (["--tags-only"] if tags_only else [])
+    with st.status(f"Refreshing {choice.upper()}{' tags' if tags_only else ''}…", expanded=True) as status:
         box = st.empty()
         lines = []
         proc = subprocess.Popen(cmd, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -31,7 +36,7 @@ if choice:
             lines.append(line.rstrip())
             box.code("\n".join(lines[-15:]))
         ok = proc.wait() == 0
-        status.update(label=f"{choice.upper()} refresh " + ("finished" if ok else "FAILED"), state="complete" if ok else "error")
+        status.update(label=f"{choice.upper()}{' tags' if tags_only else ''} refresh " + ("finished" if ok else "FAILED"), state="complete" if ok else "error")
     if ok:
         st.cache_data.clear()
         st.success("Data updated. The tables below show the new data.")
@@ -61,3 +66,6 @@ if len(part):
 # ---------------------------------------------------------------- owners
 st.subheader("Owners — who owns each account / project")
 editor_ui.owners_editor(df)
+
+st.subheader("Cloud tags — what AWS and GCP already say about each account / project")
+editor_ui.tags_panel()

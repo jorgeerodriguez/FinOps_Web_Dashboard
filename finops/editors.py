@@ -18,8 +18,10 @@ import pandas as pd
 
 from .config import load_config, resolve
 
-OWNER_CORE = {"AWS": ["account_id", "account_name", "family", "environment", "service_name", "owner", "department"],
-              "GCP": ["project", "family", "environment", "owner", "department"]}
+FINANCE_COLS = ["cost_center", "project_code", "treatment", "finance_notes"]       # typed by you; cloud tags are only shown beside them
+TREATMENTS = ["Opex", "Capex-eligible", "Prepaid"]
+OWNER_CORE = {"AWS": ["account_id", "account_name", "family", "environment", "service_name", "owner", "department"] + FINANCE_COLS,
+              "GCP": ["project", "family", "environment", "owner", "department"] + FINANCE_COLS}
 OWNER_KEY = {"AWS": "account_name", "GCP": "project"}
 RULE_COLS = ["provider", "account", "service", "months", "action", "note"]
 RULE_ACTIONS = ["add_back", "confirmed_real", "pending"]
@@ -141,6 +143,10 @@ def validate_owners(provider: str, table: pd.DataFrame) -> tuple[list[str], list
         if len(rounded):
             warns.append(f"{len(rounded)} account_id value(s) look rounded by Excel (e.g. {rounded.iloc[0]}). Matching still works through the account name, "
                          "but the id is not usable.")
+    t_ = t["treatment"].fillna("").astype(str).str.strip() if "treatment" in t else pd.Series(dtype=str)
+    odd = t_[(t_ != "") & ~t_.str.lower().isin([x.lower() for x in TREATMENTS])]
+    if len(odd):
+        warns.append(f"{len(odd)} row(s) have a treatment that is not one of {', '.join(TREATMENTS)} (e.g. “{odd.iloc[0]}”). Saved as typed.")
     return errors, warns
 
 

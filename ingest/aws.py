@@ -115,3 +115,60 @@ def fetch(session, months: int) -> pd.DataFrame:
         "cost_gross": df["cost"], "credits": 0.0, "cost_net": df["cost"],
         "is_partial": df["date"] >= pd.Timestamp(first_this),
     })
+
+
+# ----------------------------------------------------------------------------- cost allocation tags
+def _known_tags(ce) -> list[dict]:
+    out, token = [], None
+    while True:
+        r = ce.list_cost_allocation_tags(**({"NextToken": token} if token else {}))
+        out += r["CostAllocationTags"]
+        token = r.get("NextToken")
+        if not token:
+            return out
+
+
+def _tag_query(ce, start: str, end: str, key: str) -> list[tuple]:
+    """(account_id, value, cost) summed over the window, for one tag key. Untagged spend comes back as an empty value and is skipped."""
+    sums, token = {}, None
+    while True:
+        kw = dict(TimePeriod={"Start": start, "End": end}, Granularity="MONTHLY", Metrics=[METRIC],
+                  GroupBy=[{"Type": "DIMENSION", "Key": "LINKED_ACCOUNT"}, {"Type": "TAG", "Key": key}])
+        if token:
+            kw["NextPageToken"] = token
+        resp = ce.get_cost_and_usage(**kw)
+        for r in resp["ResultsByTime"]:
+            for g in r["Groups"]:
+                acct, tagv = g["Keys"][0], g["Keys"][1]
+                value = tagv.split("$", 1)[1] if "$" in tagv else tagv
+                sums[(acct, value)] = sums.get((acct, value), 0.0) + float(g["Metrics"][METRIC]["Amount"])
+        token = resp.get("NextPageToken")
+        if not token:
+            return [(a, v, c) for (a, v), c in sums.items() if v]
+
+
+def fetch_tags(session, months: int | None = None):
+    """(accounts, values, catalog) tables for finops.tags.save_provider. Read-only calls; Cost Explorer bills about $0.01 per request."""
+    from finops import tags as T
+    cfg = T.tag_config()
+    months = months or cfg["months"]
+    ce = session.client("ce", region_name="us-east-1")
+    first_this = date.today().replace(day=1)
+    s, e = (first_this - relativedelta(months=months)).isoformat(), first_this.isoformat()      # whole billed months only
+    window = f"{s[:7]}..{(first_this - relativedelta(months=1)).isoformat()[:7]}"
+    known = _known_tags(ce)
+    keys, why = T.aws_keys(known, cfg)
+    totals, names = _query(ce, s, e, ["LINKED_ACCOUNT"])
+    tot = pd.DataFrame(totals, columns=["date", "account_id", "total"]).groupby("account_id", as_index=False)["total"].sum()
+    tot["account"] = tot["account_id"].map(names).replace("", pd.NA).fillna(tot["account_id"])
+    parts = []
+    for i, k in enumerate(keys, 1):
+        rows = _tag_query(ce, s, e, k)
+        print(f"  tag {i}/{len(keys)}: {k!r} -> {len(rows)} account x value rows", flush=True)
+        parts.append(pd.DataFrame(rows, columns=["account_id", "value", "cost"]).assign(key=k))
+    tr = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=["account_id", "value", "cost", "key"])
+    tr["account"] = tr["account_id"].map(dict(zip(tot["account_id"], tot["account"])))
+    status = {t["TagKey"]: ("Active" if t["Status"] == "Active" else "Inactive") for t in known}
+    for k in why:
+        status.setdefault(k, "not found")
+    return T.build("AWS", tot[["account_id", "account", "total"]], tr[["key", "account_id", "account", "value", "cost"]], status, window, cfg, why)

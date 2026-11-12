@@ -41,6 +41,20 @@ table = "your-billing-project.your_dataset.gcp_billing_export_v1_XXXXXX_XXXXXX_X
 aws_csv = "data/owners_aws.csv"    # account_id, account_name, family, environment, owner, department
 gcp_csv = "data/owners_gcp.csv"    # project, family, environment, owner, department
 
+# Cloud tags / labels shown (read-only) next to the owner files on Data Health. Every key is optional; these are the defaults.
+[tags]
+months = 3                  # billed months looked at
+aws = "active"              # "active" = every ACTIVE cost allocation tag, or a list: ["cost-center", "Project"]
+gcp = "auto"                # "auto" = the biggest label keys (not goog-*), or a list: ["cost-center", "environment"]
+max_keys = 25               # GCP auto mode: how many keys to keep
+max_values = 200            # a key with more distinct values (Name, pod ids ...) is treated as an identifier and not kept
+exclude = ["Name", "name", "goog-*", "aws:*", "kubernetes.io/*", "k8s*", "*.k8s.io/*", "wiz*", "eks:*", "cloudfix:*"]   # * wildcards, not case sensitive
+
+# Which cloud tag key fills / is compared with the owner-file columns (first key that has a value wins)
+[tags.map]
+cost_center = ["cost-center", "Cost_Center", "CostCenter"]
+project_code = ["Project", "project", "Project_Name", "PROJECT"]
+
 [audit]
 dir = "data/audits"
 gcp_names = "data/orphans_gcp.txt"   # project names or IDs (one per line) for the GCP deep audit

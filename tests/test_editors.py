@@ -116,8 +116,8 @@ def test_new_rows_are_appended_and_bare_names_skipped(data):
     write_owners(data, AWS)
     orig = E.read_owner_file("AWS")
     e = orig[E.OWNER_CORE["AWS"] + [E.RID]].copy()
-    e.loc[10] = ["", "Brand-New", "fam", "prod", "", "Eve", "", np.nan]
-    e.loc[11] = ["", "Bare-Name", "", "", "", "", "", np.nan]
+    e.loc[10] = ["", "Brand-New", "fam", "prod", "", "Eve", "", "", "", "", "", np.nan]
+    e.loc[11] = ["", "Bare-Name", "", "", "", "", "", "", "", "", "", np.nan]
     out, st = E.merge_owner_edits(orig, e, set(orig[E.RID]), "AWS")
     assert st["added"] == 1 and list(out.account_name)[-1] == "Brand-New" and out.iloc[-1]["exit_notes"] == ""
     assert "Bare-Name" not in set(out.account_name)
