@@ -12,10 +12,10 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 
 | Page | What it answers |
 |---|---|
-| **Executive Summary** | KPIs, monthly spend vs budget, cumulative spend vs budget, where the money goes (service / account / project) with last year's cumulative line and year-over-year on matching months, Marketplace & Tax reported separately |
+| **Executive Summary** | KPIs, monthly spend vs budget, cumulative spend vs budget, where the money goes (service / account / project) with last year's cumulative line and year-over-year on matching months, Marketplace & Tax reported separately, and **spend by project code** across AWS + GCP (projects on both clouds, environment mix, Finance readiness) |
 | **Two-Year History** | Latest 12 months vs the 12 before, same month year over year, annual run-rate, what explains the change (by service / account / project), one-off months with their driver, Marketplace & Tax separately, and a look-back test of the forecast method |
 | **Month to Date** | In-progress month (as-now): projected month-end vs budget, lumps handled line by line, Marketplace charges still scheduled |
-| **AWS / GCP** | Total, by account/project, by service, owner or family; per-entity forecast and billing detail |
+| **AWS / GCP** | Total, by account/project, by service, owner, family, **project code, environment** and cost center / service name; **Projects & environments** section (project-code trend and YoY, prod vs non-prod, treemap, finance notes) with its own HTML report; per-entity forecast and billing detail |
 | **AWS vs GCP** | Trend, share and annual totals on comparable months |
 | **Forecast & Budget** | Current-year and next-year forecasts with a what-if adjustment |
 | **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review with an in-app **rules editor**, look-back of last year's forecast |
@@ -82,6 +82,7 @@ python -m ingest.run --provider gcp --tags-only   # only the cloud tag / label t
 | `[data]` | Data folder and refresh window (`history_months`, 27 by default = two full years plus the current one. AWS Cost Explorer keeps only ~14 months unless *multi-year data at monthly granularity* is enabled in Cost Management preferences; GCP goes back as far as the billing export was on) |
 | `[aws]`, `[gcp]` | SSO start URL, payer (management) account, GCP billing project and BigQuery export table |
 | `[owners]` | Paths to `owners_aws.csv` / `owners_gcp.csv` |
+| `[dimensions]` | `shared_codes`: project codes that are enterprise-wide buckets (support contracts, commitment fees), left out of the project charts but kept in tables; `placeholders`: owner-file values treated as "not filled in" |
 | `[tags]` | Which cloud tags / labels to pull (`aws = "active"` or a list, `gcp = "auto"` or a list, `months`, `exclude` patterns) and `[tags.map]`: which tag key feeds `cost_center` / `project_code` |
 | `[audit]` | Audit folder, GCP project list, idle threshold, notes to hide |
 
@@ -110,6 +111,7 @@ finops/
   history.py history_report.py             two-year comparison, one-off detection, forecast look-back, 'what moved' summary
   savings.py                               savings ledger (billing gaps added back), erosion, owner scorecard
   editors.py editor_ui.py                  safe in-app editing of the owner files and anomaly rules (backup, atomic save, stale-file check)
+  dims.py dims_ui.py dims_report.py        project code / environment / cost center tables, charts, findings, page blocks and the Projects & Environments report
   tags.py                                  cloud tags / labels per account: key selection, dominant value + coverage, comparison with the owner file
   asnow.py                                 month-to-date projection
   audit.py insights.py                     orphan screening, savings signals
@@ -158,10 +160,18 @@ python -m pytest                        # ~8 s: unit tests of the calculation la
 ```
 
 - Tests run on **synthetic data only** (`tests/synth.py`), through `FINOPS_CONFIG`, so they never read your `config.toml` or `data/`.
-  They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the cloud-tag tables and editors, the month-to-date
+  They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the project / environment tables and reports, the cloud-tag tables and editors, the month-to-date
   projection, the store, every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
 - `requirements.txt` holds compatible ranges (the major versions tested); `requirements.lock` holds the exact versions
   (`pip install -r requirements.lock` for a reproducible install). Raise a cap only after the tests pass on the new major.
+
+### Project codes, environments and cost centers
+
+`environment`, `project_code`, `cost_center`, `service_name` and `finance_notes` from the owner files are joined onto every billing row at read time, so any page or report can group by them.
+Values are tidied on the way in: spacing and case are ignored (the most common spelling wins, **across both clouds**, so `Checkout` on AWS and `CHECKOUT` on GCP are one project),
+blanks and placeholders (`TBD`, `placeholder` ...) count as not filled in, and `nonprod` / `Non Prod` become `non-prod`. The provider pages, the Executive Summary and the
+*Projects & Environments* HTML report show project-code trends with year-over-year change, prod vs non-prod (and where non-prod is growing), projects that bill on both clouds,
+and a Finance-readiness table (share of spend that carries each code). The treemap gives every project code its own color (lighter tiles = its AWS accounts, lighter still = GCP) and folds small accounts into one tile so labels stay readable in light and dark mode. The owners editor in Data Health can show only the rows still missing an owner, a project code or an environment.
 
 ### Cloud tags and Finance codes
 

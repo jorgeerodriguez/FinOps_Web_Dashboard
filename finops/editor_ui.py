@@ -61,8 +61,12 @@ def owners_editor(df_all: pd.DataFrame) -> None:
     k[2].metric("Spend with no owner (12 mo)", money(blank["Last 12 mo"].sum()))
     k[3].metric("Billing but not in the file", len(missing), help="They are added to the table below with a blank owner. Give them an owner (or leave the row blank to skip it).")
 
-    only_blank = st.checkbox("Only rows without an owner", value=len(blank) > 0, key=f"{key}_only")
-    view = (blank if only_blank else full).sort_values("Last 12 mo", ascending=False)
+    no_code = full["project_code"].fillna("").str.strip().eq("")
+    unspec = full["environment"].fillna("").str.strip().str.lower().isin(["", "unspecified"])
+    options = {"Without an owner": full["owner"].eq(""), "Without a project code": no_code, "Environment unspecified": unspec, "All rows": pd.Series(True, index=full.index)}
+    pick = st.radio("Show", [f"{k} ({int(v.sum())})" if k != "All rows" else k for k, v in options.items()], index=0 if len(blank) else 3, horizontal=True, key=f"{key}_show",
+                    help="Rows that still need something. Fix them, save, and the list shrinks.")
+    view = full[options[pick.split(" (")[0]]].sort_values("Last 12 mo", ascending=False)
     shown = {r for r in view[E.RID].dropna()}
 
     # cloud tags / labels: read-only reference columns beside what you type
@@ -129,6 +133,9 @@ def owners_editor(df_all: pd.DataFrame) -> None:
                     st.warning(w)
                 for rare, common in E.near_duplicate_owners(merged["owner"]):
                     st.warning(f"“{rare}” looks like “{common}”. Saved as typed: fix the spelling if they are the same person.")
+                for col in ("project_code", "environment"):
+                    for rare, common in E.near_duplicate_owners(merged[col]):
+                        st.warning(f"{col}: “{rare}” looks like “{common}”. Saved as typed: fix the spelling if they are the same thing (reports group by the exact text, ignoring case).")
                 b = E.save_csv(path, merged)
                 _saved(key, path, b, f"Saved {path.name}: {stats['changed']} changed, {stats['added']} added, {stats['deleted']} removed.")
 

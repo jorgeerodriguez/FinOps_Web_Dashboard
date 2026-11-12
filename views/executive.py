@@ -1,5 +1,6 @@
 import streamlit as st
 from finops import asnow
+from finops import dims_ui
 from finops import history as hist
 from finops import exec_summary as es
 from finops.exec_charts import cumulative_block
@@ -69,6 +70,8 @@ with t_aws_a:
     cumulative_block(base, "AWS", "account", "Account", topn, "aws_a", other_by)
 with t_gcp_p:
     cumulative_block(base, "GCP", "account", "Project", topn, "gcp_p", other_by)
+
+dims_ui.executive_section(df)
 
 st.subheader("Reported separately (not in budget)")
 st.dataframe(es.separate_table(get_data(apply_view=False), k), hide_index=True, width="stretch")

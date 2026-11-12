@@ -55,6 +55,12 @@ exclude = ["Name", "name", "goog-*", "aws:*", "kubernetes.io/*", "k8s*", "*.k8s.
 cost_center = ["cost-center", "Cost_Center", "CostCenter"]
 project_code = ["Project", "project", "Project_Name", "PROJECT"]
 
+# Project codes that are enterprise-wide buckets (support contracts, commitment fees ...). Kept in tables, left out of the project share charts.
+# `placeholders` are owner-file values treated as "not filled in" (default list shown).
+[dimensions]
+shared_codes = ["Enterprise Support and Savings Plans"]
+# placeholders = ["placeholder", "tbd", "n/a", "na", "none", "unknown", "-", "?", "unspecified"]
+
 [audit]
 dir = "data/audits"
 gcp_names = "data/orphans_gcp.txt"   # project names or IDs (one per line) for the GCP deep audit

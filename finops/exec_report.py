@@ -8,6 +8,8 @@ import pandas as pd
 from . import exec_summary as es
 from . import history as hist
 from .history_report import add_overview
+from . import dims
+from .dims_report import add_projects
 from . import store
 from .config import ROOT
 from .exec_charts import entity_block
@@ -66,9 +68,13 @@ def build_report(topn: int = 8, other_by: str = "Single band") -> str:
             r.section("Two years at a glance — latest 12 months vs the 12 before", new_page=True)
             add_overview(r, hh, compact=True)
             fy_ = hist.fig_yoy(hh)
-            fy_.update_layout(height=220)
-            r.chart(fy_, height=220)
+            fy_.update_layout(height=190)
+            r.chart(fy_, height=190)
             r.caption("Same month, year over year (one line per year). The Two-Year History report has the full breakdown.")
+
+        # ---- spend by project code / environment (AWS + GCP together; the Projects & Environments report has the rest)
+        if (df["project_code"] != "(no project code)").any():
+            add_projects(r, df, "Spend by project — AWS and GCP together", dims.shared_codes(), compact=True, new_page=True)
 
         # ---- pages 3-6: one block per provider / level
         for provider, level, noun in (("AWS", "service", "Service"), ("AWS", "account", "Account"),

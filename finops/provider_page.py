@@ -6,6 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from .data import monthly
 from .forecast import entity_table, forecast_two_years
+from . import dims_ui
 from .ui import COLORS, TEMPLATE, annual_budget, cfg, current_view, get_data, money, pct, show
 
 ENTITY = {"AWS": "Account", "GCP": "Project"}
@@ -30,6 +31,23 @@ def fc_chart(f: pd.DataFrame, title: str, color: str) -> go.Figure:
     return fig
 
 
+def _report_button(provider: str) -> None:
+    from .dims_report import build_report, save_report
+    st.divider()
+    st.markdown("**HTML report — Projects & Environments**")
+    st.caption("Self-contained, print-ready (light theme). Covers AWS + GCP together, then each cloud: project codes, environments, projects on both clouds and Finance readiness. "
+               "Always on the Cloud Services budget basis, whatever the sidebar shows.")
+    if st.button("Build projects & environments report", key=f"{provider}_dims_report"):
+        with st.spinner("Building report…"):
+            html = build_report()
+            path = save_report(html)
+        st.session_state["dims_report"] = (html, path.name, str(path))
+    if "dims_report" in st.session_state:
+        html, name, path = st.session_state["dims_report"]
+        st.download_button(f"Download {name}", html.encode("utf-8"), name, "text/html", key=f"{provider}_dims_dl")
+        st.caption(f"Also saved to `{path}` ({len(html) / 1e6:.1f} MB)")
+
+
 def render(provider: str) -> None:
     st.title(provider)
     st.caption(f"Spend category: **{current_view()}**")
@@ -37,8 +55,10 @@ def render(provider: str) -> None:
     ent_label = ENTITY[provider]
     f = cfg()["forecast"]
 
-    level_name = st.sidebar.radio("View by", ["Total", ent_label, "Service", "Owner", "Family"])
-    level = {"Total": None, ent_label: "account", "Service": "service", "Owner": "owner", "Family": "family"}[level_name]
+    extra = {"Project code": "project_code", "Environment": "environment", ("Cost center" if provider == "GCP" else "Service name"):
+             ("cost_center" if provider == "GCP" else "service_name")}
+    level_name = st.sidebar.radio("View by", ["Total", ent_label, "Service", "Owner", "Family"] + list(extra))
+    level = {"Total": None, ent_label: "account", "Service": "service", "Owner": "owner", "Family": "family", **extra}[level_name]
     window = st.sidebar.slider("YoY window (months)", 3, 12, f["yoy_window_months"])
     growth = st.sidebar.slider("Next-year adjustment (%)", -30.0, 30.0, float(f["default_growth_pct"]), 0.5)
     topn = st.sidebar.slider("Top N in charts", 5, 25, 12)
@@ -88,6 +108,9 @@ def render(provider: str) -> None:
     show(px.bar(monthly(t, [by]), x="date", y="cost_net", color=by, template=TEMPLATE,
                            title=f"Monthly cost — {scope}" + (f" by {level_name.lower()}" if level else " by service"),
                            labels={"cost_net": "Net cost ($)", "date": ""}), width="stretch")
+
+    # --- projects & environments ----------------------------------------------------------
+    dims_ui.projects_section(df, provider, report_button=lambda: _report_button(provider))
 
     # --- forecast -------------------------------------------------------------------------
     st.subheader("Forecast")
