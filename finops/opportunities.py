@@ -67,6 +67,20 @@ def steady_display(t: pd.DataFrame) -> pd.DataFrame:
                          "Worth asking about": t.hint})
 
 
+def orphans_billing(df: pd.DataFrame, min_monthly: float = 100.0) -> pd.DataFrame:
+    """Accounts / projects whose status says Orphan, Deleted or Remove but that still bill: either the status is wrong or something is still running."""
+    if "status" not in df:
+        return pd.DataFrame(columns=["provider", "account", "status", "avg3", "last12"])
+    d = df[df["status"].isin(["Orphan", "Deleted", "Remove"])]
+    if d.empty:
+        return pd.DataFrame(columns=["provider", "account", "status", "avg3", "last12"])
+    last = df["date"].max()
+    a3 = d[d["date"] > last - pd.DateOffset(months=3)].groupby(["provider", "account", "status"]).cost_net.sum() / 3
+    l12 = d[d["date"] > last - pd.DateOffset(months=12)].groupby(["provider", "account", "status"]).cost_net.sum()
+    out = pd.DataFrame({"avg3": a3, "last12": l12}).fillna(0.0).reset_index()
+    return out[out["avg3"] >= min_monthly].sort_values("avg3", ascending=False).reset_index(drop=True)
+
+
 def credits_watch(df: pd.DataFrame) -> pd.DataFrame:
     """Credits per provider per month (a positive number = money taken off the bill) and as a share of gross cost."""
     d = df[df["credits"] != 0]

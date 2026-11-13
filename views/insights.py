@@ -204,6 +204,15 @@ with t_opp:
     else:
         st.info("No line is steady enough at this threshold.")
 
+    st.subheader("Orphans and deleted accounts that still bill")
+    orp = O.orphans_billing(df)
+    st.caption("Accounts / projects whose status in the owner files is Orphan, Deleted or Remove, but that still billed in the last 3 months. Either the status is wrong or something is still running.")
+    if len(orp):
+        st.dataframe(orp.assign(avg3=orp.avg3.map(money), last12=orp.last12.map(money)).rename(columns={"provider": "Provider", "account": "Account / project", "status": "Status",
+                                                                                                    "avg3": "Average /mo (last 3)", "last12": "Last 12 mo"}), hide_index=True, width="stretch")
+    else:
+        st.success("None: every account / project marked Orphan, Deleted or Remove has stopped billing.")
+
     st.subheader("Credits")
     if len(crt):
         for line in O.credits_lines(crt):

@@ -137,7 +137,7 @@ def test_owner_tables_have_the_finance_columns_and_treatment_is_checked(empty_en
 
 def test_finance_edits_are_merged_and_other_columns_kept(empty_env):
     orig = E.read_owner_file("GCP")
-    orig = pd.DataFrame({"project": ["p1", "p2"], "family": ["f", "f"], "environment": ["prod", "dev"], "owner": ["a", "b"], "department": ["", ""],
+    orig = pd.DataFrame({"project": ["p1", "p2"], "status": ["", ""], "family": ["f", "f"], "environment": ["prod", "dev"], "owner": ["a", "b"], "department": ["", ""],
                          "cost_center": ["", ""], "project_code": ["", ""], "treatment": ["", ""], "finance_notes": ["", ""], "extra": ["x", "y"], E.RID: [0.0, 1.0]})
     ed = orig.drop(columns=["extra"]).copy()
     ed.loc[0, ["cost_center", "treatment"]] = ["1234-5678", "Opex"]

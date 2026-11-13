@@ -17,11 +17,12 @@ import numpy as np
 import pandas as pd
 
 from .config import load_config, resolve
+from .owners import STATUSES
 
 FINANCE_COLS = ["cost_center", "project_code", "treatment", "finance_notes"]       # typed by you; cloud tags are only shown beside them
 TREATMENTS = ["Opex", "Capex-eligible", "Prepaid"]
-OWNER_CORE = {"AWS": ["account_id", "account_name", "family", "environment", "service_name", "owner", "department"] + FINANCE_COLS,
-              "GCP": ["project", "family", "environment", "owner", "department"] + FINANCE_COLS}
+OWNER_CORE = {"AWS": ["account_id", "account_name", "status", "family", "environment", "service_name", "owner", "department"] + FINANCE_COLS,
+              "GCP": ["project", "status", "family", "environment", "owner", "department"] + FINANCE_COLS}
 OWNER_KEY = {"AWS": "account_name", "GCP": "project"}
 RULE_COLS = ["provider", "account", "service", "months", "action", "note"]
 RULE_ACTIONS = ["add_back", "confirmed_real", "pending"]
@@ -88,6 +89,9 @@ def check_fresh(path: Path, loaded_mtime: float) -> None:
 # --------------------------------------------------------------------------------------- owners
 def read_owner_file(provider: str) -> pd.DataFrame:
     d = read_csv_text(owner_path(provider), OWNER_CORE[provider])
+    cols = [c for c in d.columns if c != "status"]
+    cols.insert(cols.index(OWNER_KEY[provider]) + 1, "status")                 # status sits right after the name column, wherever the file had it
+    d = d[cols]
     d[RID] = np.arange(len(d), dtype=float)
     return d
 
@@ -143,6 +147,10 @@ def validate_owners(provider: str, table: pd.DataFrame) -> tuple[list[str], list
         if len(rounded):
             warns.append(f"{len(rounded)} account_id value(s) look rounded by Excel (e.g. {rounded.iloc[0]}). Matching still works through the account name, "
                          "but the id is not usable.")
+    st_ = t["status"].fillna("").astype(str).str.strip() if "status" in t else pd.Series(dtype=str)
+    odd_s = st_[(st_ != "") & ~st_.str.lower().isin([x.lower() for x in STATUSES])]
+    if len(odd_s):
+        warns.append(f"{len(odd_s)} row(s) have a status that is not one of {', '.join(STATUSES)} (e.g. “{odd_s.iloc[0]}”). Saved as typed.")
     t_ = t["treatment"].fillna("").astype(str).str.strip() if "treatment" in t else pd.Series(dtype=str)
     odd = t_[(t_ != "") & ~t_.str.lower().isin([x.lower() for x in TREATMENTS])]
     if len(odd):

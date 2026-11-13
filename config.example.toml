@@ -61,6 +61,10 @@ project_code = ["Project", "project", "Project_Name", "PROJECT"]
 shared_codes = ["Enterprise Support and Savings Plans"]
 # placeholders = ["placeholder", "tbd", "n/a", "na", "none", "unknown", "-", "?", "unspecified"]
 
+# Lifecycle status of accounts / projects in the owner files (New, Active, Idle, Deleted, Orphan, Remove).
+[status]
+quiet_months = 6           # an account billed before but silent this long is suggested "Deleted" (the deep audit can confirm it)
+
 [audit]
 dir = "data/audits"
 gcp_names = "data/orphans_gcp.txt"   # project names or IDs (one per line) for the GCP deep audit

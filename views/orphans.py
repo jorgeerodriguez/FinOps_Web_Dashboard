@@ -7,6 +7,7 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 from finops import audit as au
+from finops import status as ST
 from finops.config import load_config, resolve
 from finops.ui import COLORS, TEMPLATE, get_data, money, show
 
@@ -88,6 +89,7 @@ def render(provider: str, noun: str):
         kinds = st.multiselect("Show", ["Orphan-like", "Ownership gap", "OK"], default=["Orphan-like", "Ownership gap"], key=f"kinds_{provider}")
         view = scr[scr.kind.isin(kinds)]
         tbl_s = view[["account", "signal", "cost12", "avg3", "last_billed", "owner", "family", "top_service", "months_billed"]].copy()
+        tbl_s.insert(1, "status", tbl_s["account"].map(df[df.provider == provider].drop_duplicates("account").set_index("account")["status"]).fillna("(not set)"))
         tbl_s["last_billed"] = pd.to_datetime(tbl_s["last_billed"]).dt.strftime("%b %Y")
         st.dataframe(tbl_s.assign(cost12=tbl_s.cost12.map(money), avg3=tbl_s.avg3.map(money)).rename(columns={
             "account": noun, "cost12": "last 12 mo", "avg3": "avg last 3 mo", "months_billed": "months billed (of 12)"}),
@@ -95,6 +97,13 @@ def render(provider: str, noun: str):
         st.download_button("Download screening CSV", view.round(2).to_csv(index=False).encode(), f"{provider}_orphan_screening.csv", "text/csv", key=f"dls_{provider}")
         st.caption("Signals, not verdicts: they say where to look. The orphan-like group costs very little; the bigger prize is "
                    "assigning owners to the ownership-gap group (fill `data/owners_*.csv`).")
+        cand = view[(view.kind == "Orphan-like") & ~view["account"].map(df[df.provider == provider].drop_duplicates("account").set_index("account")["status"]).isin(["Orphan", "Deleted", "Remove"])]
+        pick = st.multiselect(f"Mark as Orphan in the owner file (status column)", list(cand["account"]), key=f"mark_orphan_{provider}",
+                              help="Writes status = Orphan for the chosen rows (the file is backed up first; rows not in the file are added). Change it back any time in Data Health → Owners.")
+        if pick and st.button(f"Mark {len(pick)} as Orphan", key=f"mark_orphan_btn_{provider}"):
+            n = ST.set_status(provider, pick, "Orphan", "orphans page", "screening: " + ", ".join(sorted(set(cand[cand.account.isin(pick)].signal)))[:80])
+            st.cache_data.clear()
+            st.success(f"Marked {n} {noun.lower()}(s) as Orphan.")
 
     # ------------------------------------------------------------------ deep audit: run
     st.subheader("2. Deep audit — access and activity (your credentials)")
@@ -175,6 +184,14 @@ def render(provider: str, noun: str):
         "name": noun, "status_label": "status", "cost12": "last 12 mo", "avg3": "avg 3 mo", "days_activity": "days since activity", "n_access": "# with access"}),
         hide_index=True, width="stretch")
     st.download_button("Download audit CSV", a.drop(columns=["status_label"]).to_csv(index=False).encode(), f"{provider}_orphan_audit_{data['as_of']}.csv", "text/csv", key=f"dla_{provider}")
+    gone_rows = [r["name"] for r in rows if r["status"] == "gone" or str(r.get("state", "")).upper() in ST.GONE_STATES]
+    if gone_rows:
+        st.info(f"The audit says {len(gone_rows)} {noun.lower()}(s) were removed or closed by the provider.")
+        if st.button(f"Mark those {len(gone_rows)} as Deleted in the owner file", key=f"mark_deleted_{provider}",
+                     help="Writes status = Deleted (confirmed by this audit). The file is backed up first; the change is logged in data/status_log.csv."):
+            n = ST.set_status(provider, gone_rows, "Deleted", "orphans page", f"deep audit {data['as_of']}")
+            st.cache_data.clear()
+            st.success(f"Marked {n} {noun.lower()}(s) as Deleted.")
 
     # ------------------------------------------------------------------ detail
     st.markdown(f"**{noun} detail**")

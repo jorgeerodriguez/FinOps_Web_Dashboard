@@ -240,7 +240,9 @@ def annotate(sc: Scan, df: pd.DataFrame, level: str) -> Scan:
     for t in (sc.ledger, sc.erosion):
         t = t.copy()
         if level == "account":
-            for col in ("project_code", "environment", "cost_center"):
+            for col in ("project_code", "environment", "cost_center", "status"):
+                if col not in df:
+                    continue
                 m = dim_of(df, col)
                 t[col] = [m.get((p, n), "") for p, n in zip(t.provider, t.name)]
         elif level in CROSS:
@@ -280,7 +282,9 @@ def narrative(sc: Scan, h: History, lens: str) -> list[str]:
         byp = red.groupby("provider").lower.sum()
         out.append("By provider: " + ", ".join(f"{p} {money(v)}/mo" for p, v in byp.items()) + ".")
     if len(end):
-        out.append(f"**{len(end)} lines ended** ({money(end.lower.sum())}/mo): treat as savings only after the owner confirms the shutdown was intended. "
+        conf = int(end["status"].eq("Deleted").sum()) if "status" in end else 0
+        out.append(f"**{len(end)} lines ended** ({money(end.lower.sum())}/mo)" + (f", {conf} of them marked Deleted in the owner files" if conf else "")
+                   + ": treat as savings only after the owner confirms the shutdown was intended. "
                    f"Biggest: " + "; ".join(f"{r.provider} · {r.name[:30]} ({money(r.lower)}/mo)" for r in end.sort_values('lower', ascending=False).head(3).itertuples()) + ".")
     if len(E):
         out.append(f"**{money(E.regrown.sum())}/mo of earlier reductions has come back** across {len(E)} lines (largest: "
@@ -342,7 +346,7 @@ def fig_arc(df: pd.DataFrame) -> go.Figure:
 
 # --------------------------------------------------------------------------------------- tables
 def _dim_cols(out: pd.DataFrame, L: pd.DataFrame) -> pd.DataFrame:
-    for col, label in (("project_code", "Project code"), ("environment", "Environment"), ("cost_center", "Cost center")):
+    for col, label in (("project_code", "Project code"), ("environment", "Environment"), ("cost_center", "Cost center"), ("status", "Status")):
         if col in L and not (col == "project_code" and "name" in L and (L[col] == L["name"]).all()):
             out[label] = L[col].values
     return out

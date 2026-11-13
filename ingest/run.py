@@ -21,6 +21,18 @@ def _save_tags(provider: str, tables) -> None:
     print(f"{provider} tags: {len(acc)} accounts/projects, {len(got)} of {len(cat)} tag keys pulled ({len(vals):,} account x value rows)")
 
 
+def _add_new(provider: str) -> None:
+    """New accounts / projects found in billing go into the owner file with status New, so you can fill their fields."""
+    from finops import status
+    try:
+        added = status.add_new(provider)
+    except Exception as e:                                       # never fail a billing refresh over the owner file
+        print(f"{provider} new accounts not added: {type(e).__name__}: {str(e)[:200]}")
+        return
+    if added:
+        print(f"{provider}: {len(added)} new account(s) added to the owner file as New: " + ", ".join(added[:8]) + ("…" if len(added) > 8 else ""))
+
+
 def run_aws(months: int, profile: str | None, billing: bool = True, tags: bool = True) -> None:
     from ingest import aws
     session = aws.user_session(profile)
@@ -28,6 +40,7 @@ def run_aws(months: int, profile: str | None, billing: bool = True, tags: bool =
         df = aws.fetch(session, months)
         store.upsert(df, "AWS", note=f"Cost Explorer, {months} months")
         print(f"AWS: {len(df):,} rows, {df.date.min():%Y-%m} -> {df.date.max():%Y-%m}, net ${df.cost_net.sum():,.0f}")
+        _add_new("AWS")
     if tags:
         try:
             _save_tags("AWS", aws.fetch_tags(session))
@@ -46,6 +59,7 @@ def run_gcp(months: int, billing: bool = True, tags: bool = True) -> None:
         df = gcp.fetch(months)
         store.upsert(df, "GCP", note=f"BigQuery export, {months} months")
         print(f"GCP: {len(df):,} rows, {df.date.min():%Y-%m} -> {df.date.max():%Y-%m}, net ${df.cost_net.sum():,.0f}")
+        _add_new("GCP")
     if tags:
         try:
             _save_tags("GCP", gcp.fetch_tags())

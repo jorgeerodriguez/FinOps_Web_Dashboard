@@ -23,7 +23,7 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
 | **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded) on an account, service or **project-code** lens, with where the savings landed by project code / environment / cost center; **scorecard** by owner, project code or cost center with a per-group review and a printable **review pack**; **opportunities** (non-prod as big as prod, steady always-on lines, credits); spikes, new spend and creeping growth with finance notes; ownership and **Finance gaps** |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
-| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, and tag coverage |
+| **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, tag coverage, and each account's lifecycle **status** (New · Active · Idle · Deleted · Orphan · Remove) |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
 print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar).
@@ -83,6 +83,7 @@ python -m ingest.run --provider gcp --tags-only   # only the cloud tag / label t
 | `[aws]`, `[gcp]` | SSO start URL, payer (management) account, GCP billing project and BigQuery export table |
 | `[owners]` | Paths to `owners_aws.csv` / `owners_gcp.csv` |
 | `[dimensions]` | `shared_codes`: project codes that are enterprise-wide buckets (support contracts, commitment fees), left out of the project charts but kept in tables; `placeholders`: owner-file values treated as "not filled in" |
+| `[status]` | `quiet_months` (default 6): an account billed before but silent this long is suggested *Deleted* |
 | `[tags]` | Which cloud tags / labels to pull (`aws = "active"` or a list, `gcp = "auto"` or a list, `months`, `exclude` patterns) and `[tags.map]`: which tag key feeds `cost_center` / `project_code` |
 | `[audit]` | Audit folder, GCP project list, idle threshold, notes to hide |
 
@@ -93,6 +94,7 @@ Files under `data/` (all git-ignored; see `examples/` for the shape):
 | `billing.parquet` | Normalized store: date, provider, account, service, category, owner, family, gross/credits/net, `is_partial` |
 | `refresh_log.csv` | Who refreshed what, and when |
 | `owners_aws.csv`, `owners_gcp.csv` | Owner / family / department per account or project, plus the Finance columns `cost_center`, `project_code`, `treatment` (Opex · Capex-eligible · Prepaid) and `finance_notes`. Edit in **Data Health** or in any spreadsheet |
+| `status_log.csv` | Every status change (automatic or by hand): when, who, account, old → new, reason. `archive/` holds rows removed by a purge |
 | `tags_accounts.csv`, `tags_values.csv`, `tags_catalog.csv` | Read-only cloud tag snapshot per account / project (last 3 billed months), refreshed with the tag buttons. Never overwrites what you typed in the owner files |
 | `anomaly_rules.csv` | Reviewed billing gaps: `add_back` · `confirmed_real` · `pending`, with a note |
 | `orphans_gcp.txt` | GCP projects (names or IDs) for the deep audit |
@@ -180,6 +182,15 @@ reading as a saving on one line and new spend on another. The ledger, scorecard 
 **leads, not savings** (billing data cannot see utilization or existing reservations): project codes whose non-prod spend is at least their prod spend, lines that billed steadily
 for 12 months (commitment candidates, to be checked against existing coverage), and credit trends. *Finance gaps* lists the biggest spend still missing an environment,
 project code or cost center.
+
+### Account status
+
+Each row of the owner files has a `status`, right after its name column: **New** (found in billing and not seen before), **Active** (billing is current), **Idle** (never billed in the history we hold),
+**Deleted** (billed before, then silent for `quiet_months`, or the deep audit says the provider removed it), **Orphan** (looks abandoned or unowned, set by you, e.g. from the Orphans page) and **Remove**
+(to be purged). The file keeps the status *you* decided; the app shows a **suggested** status beside it from billing and the latest deep audit, and never changes Orphan or Remove by itself.
+A refresh adds every new account to the owner file as *New* so you can fill its fields (it becomes *Active* when owner, project code and environment are filled). In Data Health → Owners you can
+change a status by hand, apply the suggestions to the rows on screen, add accounts that bill but are not in the file, and **purge** rows marked Remove (they are archived to `data/archive/`, billing history is untouched).
+Deleted and Remove rows drop out of the "still missing" counts, and Orphan / Deleted accounts that still bill show up on the Opportunities tab.
 
 ### Cloud tags and Finance codes
 

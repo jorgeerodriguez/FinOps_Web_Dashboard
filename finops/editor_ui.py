@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 
 from . import editors as E
+from . import status as ST
 from . import tags as T
 from .ui import money
 
@@ -11,8 +12,8 @@ from .ui import money
 def _reset_flag(key: str) -> None:
     """After a save the editor must start again from the file; Streamlit keeps edits in session state until the key is dropped."""
     if st.session_state.pop(f"{key}_reset", False):
-        st.session_state.pop(key, None)
-        st.session_state.pop(f"{key}_pf", None)
+        for suffix in ("", "_pf", "_st", "_pf_st"):
+            st.session_state.pop(f"{key}{suffix}", None)
 
 
 def _saved(key: str, path, backup, msg: str) -> None:
@@ -36,6 +37,9 @@ def _loaded_mtime(key: str, path) -> float:
     return st.session_state[k]
 
 
+ST_OPTIONS = ST.STATUSES
+
+
 # --------------------------------------------------------------------------------------- owners
 def owners_editor(df_all: pd.DataFrame) -> None:
     """Assign owners to accounts / projects. df_all: billing rows (any category), used for spend and to find accounts missing from the file."""
@@ -54,20 +58,41 @@ def owners_editor(df_all: pd.DataFrame) -> None:
     full = pd.concat([table, missing], ignore_index=True)
     full["Last 12 mo"] = [E.row_spend(table, spend, prov).iloc[i] if i < len(table) else float(spend.get(n, 0.0)) for i, n in enumerate(full[name])]
 
-    blank = full[(full["owner"] == "")]
+    # lifecycle status: what is typed vs what billing (and the latest deep audit) suggest
+    ss = ST.suggest(prov, full, ST.facts(prov, full, df_all))
+    isnew_row = full[E.RID].isna()
+    ss.loc[isnew_row, ["suggested", "why"]] = ["New", "bills but is not in the file yet"]
+    ss.loc[isnew_row, "same"] = False
+    full["status_check"] = ST.check_text(ss)
+    review = (~ss["same"]) | ss["why"].ne("")
+    hidden = full["status"].map(ST.canon).isin(ST.HIDDEN)                       # Deleted / Remove rows do not count as "still missing"
+
+    blank = full[(full["owner"] == "") & ~hidden]
     k = st.columns(4)
     k[0].metric("Rows in the file", len(table))
-    k[1].metric("Without an owner", len(blank), help="Rows with a blank owner, plus accounts that bill but are not in the file at all")
+    k[1].metric("Without an owner", len(blank), help="Rows with a blank owner (Deleted and Remove rows are not counted), plus accounts that bill but are not in the file at all")
     k[2].metric("Spend with no owner (12 mo)", money(blank["Last 12 mo"].sum()))
     k[3].metric("Billing but not in the file", len(missing), help="They are added to the table below with a blank owner. Give them an owner (or leave the row blank to skip it).")
 
     no_code = full["project_code"].fillna("").str.strip().eq("")
     unspec = full["environment"].fillna("").str.strip().str.lower().isin(["", "unspecified"])
-    options = {"Without an owner": full["owner"].eq(""), "Without a project code": no_code, "Environment unspecified": unspec, "All rows": pd.Series(True, index=full.index)}
-    pick = st.radio("Show", [f"{k} ({int(v.sum())})" if k != "All rows" else k for k, v in options.items()], index=0 if len(blank) else 3, horizontal=True, key=f"{key}_show",
-                    help="Rows that still need something. Fix them, save, and the list shrinks.")
+    options = {"Without an owner": full["owner"].eq("") & ~hidden, "Without a project code": no_code & ~hidden, "Environment unspecified": unspec & ~hidden,
+               "Status needs review": review, "New": full["status"].map(ST.canon).eq("New"), "All rows": pd.Series(True, index=full.index)}
+    pick = st.radio("Show", [f"{k} ({int(v.sum())})" if k != "All rows" else k for k, v in options.items()], index=0 if len(blank) else len(options) - 1, horizontal=True, key=f"{key}_show",
+                    help="Rows that still need something. Fix them, save, and the list shrinks. Deleted and Remove rows are left out of the first three.")
     view = full[options[pick.split(" (")[0]]].sort_values("Last 12 mo", ascending=False)
     shown = {r for r in view[E.RID].dropna()}
+    vidx = view.index
+
+    # status summary, new accounts, purge
+    counts = ST.summary(table)
+    st.caption("**Status:** " + " · ".join(f"{k} {v}" for k, v in counts.items() if v) + f" — suggestions use {ST.quiet_months()} months of silence (`[status] quiet_months` in config.toml).")
+    newbill = ST.new_accounts(prov, table, df_all)
+    if len(newbill):
+        st.info(f"{len(newbill)} {'accounts' if prov == 'AWS' else 'projects'} bill but are not in the file: " + ", ".join(newbill["account"].head(5)) + ("…" if len(newbill) > 5 else ""))
+        if st.button(f"Add them to the file as New", key=f"{key}_addnew"):
+            ST.add_new(prov, df_all, "button")
+            _saved(key, path, None, f"Added {len(newbill)} account(s) as New to {path.name}.")
 
     # cloud tags / labels: read-only reference columns beside what you type
     acc, vals = T.read_accounts(), T.read_values()
@@ -85,8 +110,10 @@ def owners_editor(df_all: pd.DataFrame) -> None:
     else:
         st.info(f"No cloud tags pulled for {prov} yet. Click **Refresh {prov} tags** at the top of this page to see the tags beside each row.")
 
+    applys = st.checkbox("Fill the status column with the suggestions", key=f"{key}_applystatus",
+                         help="Fills the Status column from billing (and the deep audit). Orphan and Remove are never changed. Nothing is saved until you click Save owners. Switching this resets unsaved edits.")
     view = view.reset_index(drop=True)
-    name_col = core[1] if prov == "AWS" else core[0]
+    name_col = name
     cloud = T.cloud_columns(prov, view, name_col, cloud_keys, dom, acc) if have_tags else pd.DataFrame(index=view.index)
     if have_tags:
         sugg = T.suggestions(prov, view, name_col, dom, acc)
@@ -94,18 +121,25 @@ def owners_editor(df_all: pd.DataFrame) -> None:
         if prefill:
             view = T.prefill(view, sugg)
         cloud["Tag check"] = chk
+    if applys:
+        view = ST.apply_suggestions(view, pd.DataFrame({"suggested": ss.loc[vidx, "suggested"].values}, index=view.index))
+    cloud["Status check"] = view["status_check"].values
     show_df = pd.concat([view[core + ["Last 12 mo"]], cloud, view[[E.RID]]], axis=1)
     show_df["treatment"] = show_df["treatment"].replace("", None)
+    show_df["status"] = show_df["status"].map(ST.canon).replace("", None)
     cfg = {E.RID: None, "Last 12 mo": st.column_config.NumberColumn("Last 12 mo", format="$%,.0f", disabled=True, help="Spend over the last 12 billed months (all categories)"),
            "owner": st.column_config.TextColumn("owner", help="Use the same spelling every time: names are matched exactly"),
            name: st.column_config.TextColumn(name, required=True),
            "cost_center": st.column_config.TextColumn("cost_center", help="Finance cost center code"),
            "project_code": st.column_config.TextColumn("project_code", help="Finance project code"),
            "treatment": st.column_config.SelectboxColumn("treatment", options=E.TREATMENTS, help="Opex, Capex-eligible or Prepaid: a note for Finance, not used in any calculation yet"),
-           "finance_notes": st.column_config.TextColumn("finance_notes")}
+           "finance_notes": st.column_config.TextColumn("finance_notes"),
+           "status": st.column_config.SelectboxColumn("status", options=ST_OPTIONS, help="New · Active · Idle · Deleted · Orphan · Remove. Change it by hand any time; Orphan and Remove are never set automatically.")}
     for c in cloud.columns:
-        cfg[c] = st.column_config.TextColumn(c, disabled=True, help="From the cloud, read-only. Refresh tags to update." if c != "Tag check" else "Compares what you typed with the cloud tag")
-    ekey = f"{key}_pf" if prefill else key
+        cfg[c] = st.column_config.TextColumn(c, disabled=True, help=("Compares what you typed with the cloud tag" if c == "Tag check" else
+                                                                     "What billing (and the latest deep audit) suggest for the status, only where it differs from what is typed" if c == "Status check"
+                                                                     else "From the cloud, read-only. Refresh tags to update."))
+    ekey = key + ("_pf" if prefill else "") + ("_st" if applys else "")
     edited = st.data_editor(show_df, key=ekey, hide_index=True, num_rows="dynamic", column_config=cfg, width="stretch")
 
     c1, c2 = st.columns([1, 4])
@@ -114,9 +148,10 @@ def owners_editor(df_all: pd.DataFrame) -> None:
         st.session_state[f"{key}_reset"] = True
         st.rerun()
     if c1.button("Save owners", type="primary", key=f"{key}_save"):
-        orig_full = pd.concat([table, missing], ignore_index=True)
+        # `table` is the file as loaded. Accounts that were only PROPOSED (they bill but are not in the file) come back from the editor as new rows
+        # and are written only if something was filled in; they must not be part of the original, or they would be written twice.
+        orig_full = table
         merged, stats = E.merge_owner_edits(orig_full, edited, shown, prov)
-        # accounts that were only proposed (not in the file) and still have no owner are not written
         errors, warns = E.validate_owners(prov, merged)
         if errors:
             for e in errors:
@@ -137,7 +172,23 @@ def owners_editor(df_all: pd.DataFrame) -> None:
                     for rare, common in E.near_duplicate_owners(merged[col]):
                         st.warning(f"{col}: “{rare}” looks like “{common}”. Saved as typed: fix the spelling if they are the same thing (reports group by the exact text, ignoring case).")
                 b = E.save_csv(path, merged)
+                ST.log_changes(prov, ST.diff_log(prov, orig_full, merged), "editor")
                 _saved(key, path, b, f"Saved {path.name}: {stats['changed']} changed, {stats['added']} added, {stats['deleted']} removed.")
+
+    with st.expander("Purge rows marked Remove · status history"):
+        n_rm = int(table["status"].map(ST.canon).eq("Remove").sum())
+        st.caption(f"{n_rm} row(s) in the file are marked **Remove**. Purging moves them to `data/archive/` (a CSV you can restore from) and takes them out of the owner file. "
+                   "Billing history is not touched, so past spend still counts in trends and the savings ledger. Save any edits above first.")
+        if n_rm and st.checkbox(f"Yes, purge the {n_rm} row(s) marked Remove", key=f"{key}_purge_ok"):
+            if st.button("Purge now", key=f"{key}_purge"):
+                n = ST.purge(prov)
+                _saved(key, path, None, f"Archived and removed {n} row(s) marked Remove from {path.name}.")
+        lg = ST.log_path()
+        if lg.is_file():
+            h = pd.read_csv(lg, dtype=str, keep_default_na=False)
+            h = h[h["provider"] == prov].sort_values("when", ascending=False).head(25)
+            st.markdown("**Latest status changes**")
+            st.dataframe(h[["when", "who", "account", "old", "new", "source", "reason"]], hide_index=True, width="stretch")
 
 
 # --------------------------------------------------------------------------------------- anomaly rules

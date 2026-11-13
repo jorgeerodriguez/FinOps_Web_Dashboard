@@ -6,9 +6,10 @@ from .config import load_config, resolve
 UNASSIGNED = "(unassigned)"
 
 # Columns of the owner files that are joined onto every billing row at read time (typed by you in Data Health)
-DIM_COLS = ["environment", "project_code", "cost_center", "service_name", "finance_notes"]
+DIM_COLS = ["environment", "project_code", "cost_center", "service_name", "finance_notes", "status"]
+STATUSES = ["New", "Active", "Idle", "Deleted", "Orphan", "Remove"]       # lifecycle of an account / project (see finops/status.py)
 MISSING = {"environment": "unspecified", "project_code": "(no project code)", "cost_center": "(no cost center)",
-           "service_name": "(no service name)", "finance_notes": ""}
+           "service_name": "(no service name)", "finance_notes": "", "status": "(not set)"}
 _ENV_ALIASES = {"nonprod": "non-prod", "non prod": "non-prod", "non_prod": "non-prod", "production": "prod", "prd": "prod"}
 PLACEHOLDERS = ["placeholder", "tbd", "n/a", "na", "none", "unknown", "-", "?", "unspecified"]
 
@@ -50,6 +51,9 @@ def _canon(values: pd.Series, col: str) -> pd.Series:
     if col == "finance_notes":
         return v
     low = v.str.lower()
+    if col == "status":
+        canon = {x.lower(): x for x in STATUSES}
+        return low.map(lambda x: canon.get(x, MISSING["status"] if x == "" else v[low == x].iloc[0]))
     if col == "environment":
         return low.map(lambda x: MISSING["environment"] if x in _placeholders() or x == "" else _ENV_ALIASES.get(x, x))
     blank = (low == "") | low.isin(_placeholders())
