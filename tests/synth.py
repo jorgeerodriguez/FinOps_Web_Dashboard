@@ -57,6 +57,37 @@ def make_billing(n_months: int = 27, partial: bool = True) -> pd.DataFrame:
     return df
 
 
+def make_equinix_raw(n: int = 12, end: pd.Timestamp = END + pd.DateOffset(months=1)):
+    """Fake Equinix Billing API payloads: (invoices, lines, names). Last month: Node1 ends, a new Internet line appears, the router goes up.
+    One $5,000 credit in the 6th month."""
+    idx = pd.date_range(end=end, periods=n, freq="MS")
+    uid = lambda k: f"{k:08d}-0000-0000-0000-000000000000"
+    names = {uid(1): "Lab-FW-Node0", uid(2): "Lab-FW-Node1", uid(3): "lab-router", uid(4): "lab-aws-primary"}
+    invoices, lines = [], []
+    for i, d in enumerate(idx):
+        last = i == n - 1
+        defs = [("NEDG-1", "Network Edge firewall", uid(1), 2200.0), ("AWS-1", "Fabric to AWS virtual connection", uid(4), 500.0),
+                ("CR-1", "Cloud Router", uid(3), 1400.0 if last else 1200.0)]
+        if not last:
+            defs.append(("NEDG-2", "Network Edge firewall", uid(2), 2200.0))
+        else:
+            defs.append(("EC0-1", "Internet Access 1G", None, 160.0))
+        inv_id = f"INV{i:03d}"
+        for code, desc, u, amt in defs:
+            lines.append(dict(transactionDate=f"{d:%Y-%m-%d}", transactionId=inv_id, activityType="RECURRING", productCode=code, productName=desc,
+                              productDescription=f"{desc} {u or ''} -Recurring Charge", recurringAmount=amt, nonRecurringAmount=0, adjustment=0,
+                              taxAmount=amt * 0.05, currencyCode="USD"))
+        total = sum(x[3] for x in defs)
+        invoices.append(dict(transactionDate=f"{d:%Y-%m-%d}", transactionId=inv_id, transactionType="INVOICE", currencyCode="USD",
+                             totalRecurringAmount=total, totalNonRecurringAmount=0, totalAmount=total * 1.05))
+        if i == 5:
+            lines.append(dict(transactionDate=f"{d:%Y-%m-%d}", transactionId="CM001", activityType="CREDIT", productCode="NEDG-1", productName="Credit",
+                              productDescription="Network Edge firewall credit", recurringAmount=-5000.0, nonRecurringAmount=0, adjustment=0, taxAmount=0, currencyCode="USD"))
+            invoices.append(dict(transactionDate=f"{d:%Y-%m-%d}", transactionId="CM001", transactionType="CREDIT_MEMO", currencyCode="USD",
+                                 totalRecurringAmount=-5000.0, totalNonRecurringAmount=0, totalAmount=-5000.0))
+    return invoices, lines, names
+
+
 def write_config(path: Path, data_dir: Path) -> Path:
     path.write_text(f"""
 [fiscal]
@@ -101,4 +132,8 @@ def make_env(root: Path, with_data: bool = True, n_months: int = 27) -> Path:
     data.mkdir(parents=True, exist_ok=True)
     if with_data:
         make_billing(n_months).to_parquet(data / "billing.parquet", index=False)
+        from finops import equinix as eq
+        ln, inv = eq.normalize(*make_equinix_raw())
+        ln.to_parquet(data / "equinix_lines.parquet", index=False)
+        inv.to_parquet(data / "equinix_invoices.parquet", index=False)
     return write_config(root / "config.toml", data)

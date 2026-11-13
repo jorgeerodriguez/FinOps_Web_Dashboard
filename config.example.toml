@@ -71,3 +71,10 @@ gcp_names = "data/orphans_gcp.txt"   # project names or IDs (one per line) for t
 idle_below_usd = 1                  # avg monthly spend below this counts as "no spend"
 # Audit notes that start with any of these are not shown (expected for your role). Everything else is shown once, at the top.
 hide_notes = ["IAM Identity Center not readable"]
+
+# Other platforms (independent of AWS / GCP; never added to the cloud totals or budgets).
+# Credentials are read from the process environment, or from the env file below (git-ignored; values are held in memory only).
+[equinix]
+# env_file = ".env"                  # default: .env next to the app. May point anywhere, e.g. "../Equinix/.env"
+# account_number = ""                # optional; found automatically from your Fabric connections when blank
+#   env file keys: EQUINIX_CLIENT_ID, EQUINIX_CLIENT_SECRET   (or EQUINIX_TOKEN);  optional EQUINIX_URL

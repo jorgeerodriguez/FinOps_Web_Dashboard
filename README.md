@@ -20,13 +20,14 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **Forecast & Budget** | Current-year and next-year forecasts with a what-if adjustment |
 | **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review with an in-app **rules editor**, look-back of last year's forecast |
 | **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, price change vs the prior 12 months, renewal watch |
+| **Equinix** (Other platforms) | Equinix Fabric and Network Edge spend, **independent of AWS and GCP** (not in the cloud totals or budgets): monthly charges by category, run-rate, latest month by item, what changed since last month (new / ended / higher / lower lines), credits kept separate, and an HTML report. A one-line summary also appears on the Executive Summary |
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
 | **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded) on an account, service or **project-code** lens, with where the savings landed by project code / environment / cost center; **scorecard** by owner, project code or cost center with a per-group review and a printable **review pack**; **opportunities** (non-prod as big as prod, steady always-on lines, credits); spikes, new spend and creeping growth with finance notes; ownership and **Finance gaps** |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
 | **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, tag coverage, and each account's lifecycle **status** (New · Active · Idle · Deleted · Orphan · Remove) |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
-print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar).
+print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar, Equinix).
 
 ## Design principles
 
@@ -163,7 +164,7 @@ python -m pytest                        # ~8 s: unit tests of the calculation la
 
 - Tests run on **synthetic data only** (`tests/synth.py`), through `FINOPS_CONFIG`, so they never read your `config.toml` or `data/`.
   They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the project / environment tables and reports, the cloud-tag tables and editors, the month-to-date
-  projection, the store, every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
+  projection, the store, the Equinix billing normalisation and collector (against a faked API), every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
 - `requirements.txt` holds compatible ranges (the major versions tested); `requirements.lock` holds the exact versions
   (`pip install -r requirements.lock` for a reproducible install). Raise a cap only after the tests pass on the new major.
 
@@ -191,6 +192,21 @@ Each row of the owner files has a `status`, right after its name column: **New**
 A refresh adds every new account to the owner file as *New* so you can fill its fields (it becomes *Active* when owner, project code and environment are filled). In Data Health → Owners you can
 change a status by hand, apply the suggestions to the rows on screen, add accounts that bill but are not in the file, and **purge** rows marked Remove (they are archived to `data/archive/`, billing history is untouched).
 Deleted and Remove rows drop out of the "still missing" counts, and Orphan / Deleted accounts that still bill show up on the Opportunities tab.
+
+### Other platforms (Equinix)
+
+Equinix is billed on its own, so it has its own page under **Other platforms** and its own store (`data/equinix_lines.parquet`, `equinix_invoices.parquet`,
+`platforms_log.csv`). It never touches `billing.parquet`, the budgets, the savings ledger or the project-code lens.
+
+- **Refresh:** Data Health → *Refresh Equinix* (or `python -m ingest.equinix`). It calls the Equinix Billing API read-only with plain REST, no SDK.
+  Equinix keeps about 12 months of invoices, so every refresh **adds** to the history saved here.
+- **Credentials:** an Equinix API app (client ID and secret; SSO logins cannot call the API). Put `EQUINIX_CLIENT_ID` and `EQUINIX_CLIENT_SECRET`
+  (or `EQUINIX_TOKEN`) in the process environment or in an env file. The file defaults to `.env` next to the app (git-ignored) and can be anywhere via
+  `[equinix] env_file` in `config.toml`. Values are held in memory only, never written, and removed from any error text.
+- **Meaning:** charges are recurring + one-time amounts on invoice lines before tax. **Credits** (negative lines, credit memos) are refunds or adjustments:
+  shown on their own and never counted as lower charges, run-rate reductions or savings. Run-rate is the recurring total on the latest invoice.
+- Item names come from matching the UUID on each invoice line to your Fabric connections, Cloud Routers and Network Edge nodes (best effort; Equinix truncates some names).
+- Utilization, right-sizing and BGP reliability are not on this page; they need the Equinix SDK and stay in the standalone Equinix report.
 
 ### Cloud tags and Finance codes
 

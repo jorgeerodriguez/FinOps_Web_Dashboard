@@ -15,6 +15,9 @@ pages = {
         st.Page("views/gcp.py", title="GCP", icon="🔵"),
         st.Page("views/marketplace.py", title="Marketplace", icon="🛒"),
     ],
+    "Other platforms": [
+        st.Page("views/equinix.py", title="Equinix", icon="🔌"),
+    ],
     "Planning": [
         st.Page("views/forecast.py", title="Forecast & Budget", icon="🔮"),
         st.Page("views/next_year.py", title="Next Year Forecast", icon="📅"),

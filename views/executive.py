@@ -76,6 +76,9 @@ dims_ui.executive_section(df)
 st.subheader("Reported separately (not in budget)")
 st.dataframe(es.separate_table(get_data(apply_view=False), k), hide_index=True, width="stretch")
 
+from finops import platforms_ui
+platforms_ui.executive_strip()
+
 st.subheader("Top services (latest month)")
 st.dataframe(es.top_services(k), hide_index=True, width="stretch")
 
