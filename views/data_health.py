@@ -27,11 +27,13 @@ if t1.button("Refresh AWS tags", help="Only the cost allocation tag tables (a fe
 if t2.button("Refresh GCP tags", help="Only the label tables (reads about 25 GB of the billing export, a few cents). Billing data is not re-pulled."):
     choice, tags_only = "gcp", True
 st.caption("Other platforms (separate from AWS / GCP; credentials come from the env file named in config.toml):")
-p1, _ = st.columns([1, 3])
+p1, p2, _ = st.columns([1, 1, 2])
+if p2.button("Refresh Grafana", help="Read-only queries to the stack's usage datasource (about 400 days, a minute or so). Needs GRAFANA_STACK_TOKEN and [grafana] url."):
+    choice = "grafana"
 if p1.button("Refresh Equinix", help="Read-only call to the Equinix Billing API: about 12 months of invoices. Needs EQUINIX_CLIENT_ID / EQUINIX_CLIENT_SECRET."):
     choice = "equinix"
 if choice:
-    cmd = ([sys.executable, "-u", "-m", "ingest.equinix"] if choice == "equinix" else
+    cmd = ([sys.executable, "-u", "-m", f"ingest.{choice}"] if choice in ("equinix", "grafana") else
            [sys.executable, "-u", "-m", "ingest.run", "--provider", choice] + (["--profile", profile] if profile and choice == "aws" else []) + (["--tags-only"] if tags_only else []))
     with st.status(f"Refreshing {choice.upper()}{' tags' if tags_only else ''}…", expanded=True) as status:
         box = st.empty()

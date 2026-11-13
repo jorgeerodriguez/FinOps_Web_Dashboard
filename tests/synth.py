@@ -88,6 +88,34 @@ def make_equinix_raw(n: int = 12, end: pd.Timestamp = END + pd.DateOffset(months
     return invoices, lines, names
 
 
+def make_grafana():
+    """Synthetic Grafana usage tables: 13 complete months to Oct 2026, a running balance that steps down after each month closes, and the facts."""
+    from finops import grafana as gf
+    idx = pd.date_range(end=END, periods=13, freq="MS")
+    base = {"metrics": 9000.0, "logs": 2000.0, "grafana": 3000.0, "infra_o11y": 1000.0}
+    rows = []
+    for i, d in enumerate(idx):
+        for comp, v in base.items():
+            val = v * (1 + 0.02 * i) + (3000.0 if comp == "infra_o11y" and i == 12 else 0.0)
+            rows.append(dict(month=d, component=comp, product=gf.product_for(comp), cost=val))
+        rows.append(dict(month=d, component="total", product="Other", cost=sum(r["cost"] for r in rows if r["month"] == d)))
+    costs = pd.DataFrame(rows, columns=gf.COST_COLS)
+    drivers = pd.DataFrame([dict(month=d, driver="Active series", unit="series", value=2_000_000.0 + i * 10_000) for i, d in enumerate(idx)], columns=gf.DRV_COLS)
+    days = pd.date_range(idx[0], END + pd.DateOffset(months=1) + pd.Timedelta(days=12), freq="D")
+    tot = costs[costs.component == "total"].set_index("month")["cost"]
+    bal, cur = [], 500_000.0
+    for dd in days:
+        m = dd.replace(day=1) - pd.DateOffset(months=1)
+        if dd.day == 2 and m in tot.index:
+            cur -= float(tot[m])
+        bal.append(cur)
+    balance = pd.DataFrame({"month": days, "balance": bal}, columns=gf.BAL_COLS)
+    facts = dict(as_of="2026-11-13", current_month="2026-11", current_estimate=12_000.0, commit_total=500_000.0, commit_balance=float(bal[-1]),
+                 contract_start="2025-08-07", contract_end="2027-08-06", recommended_savings_series=50_000.0, active_series_now=2_100_000.0,
+                 activity=dict(active_users={"7": 5, "30": 8, "90": 9}, folders_30d={"Platform": 900, "General (no folder)": 100}, dashboards_active_90d=20, dashboards_total=30, notes=[]))
+    return costs, drivers, balance, facts
+
+
 def write_config(path: Path, data_dir: Path) -> Path:
     path.write_text(f"""
 [fiscal]
@@ -136,4 +164,10 @@ def make_env(root: Path, with_data: bool = True, n_months: int = 27) -> Path:
         ln, inv = eq.normalize(*make_equinix_raw())
         ln.to_parquet(data / "equinix_lines.parquet", index=False)
         inv.to_parquet(data / "equinix_invoices.parquet", index=False)
+        import json
+        gc, gd, gb, gfacts = make_grafana()
+        gc.to_parquet(data / "grafana_costs.parquet", index=False)
+        gd.to_parquet(data / "grafana_drivers.parquet", index=False)
+        gb.to_parquet(data / "grafana_balance.parquet", index=False)
+        (data / "grafana_facts.json").write_text(json.dumps(gfacts))
     return write_config(root / "config.toml", data)

@@ -17,6 +17,7 @@ pages = {
     ],
     "Other platforms": [
         st.Page("views/equinix.py", title="Equinix", icon="🔌"),
+        st.Page("views/grafana.py", title="Grafana Cloud", icon="📈"),
     ],
     "Planning": [
         st.Page("views/forecast.py", title="Forecast & Budget", icon="🔮"),

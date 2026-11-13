@@ -78,3 +78,9 @@ hide_notes = ["IAM Identity Center not readable"]
 # env_file = ".env"                  # default: .env next to the app. May point anywhere, e.g. "../Equinix/.env"
 # account_number = ""                # optional; found automatically from your Fabric connections when blank
 #   env file keys: EQUINIX_CLIENT_ID, EQUINIX_CLIENT_SECRET   (or EQUINIX_TOKEN);  optional EQUINIX_URL
+
+[grafana]
+# url = "https://yourorg.grafana.net"      # your Grafana Cloud stack
+# env_file = ".env"                        # default: .env next to the app. Key: GRAFANA_STACK_TOKEN (a read-only service-account token)
+# monthly_budget = 0                       # optional: draws a budget line and "over / under" in the findings
+# usage_datasource = "grafanacloud-usage"  # the stack's pre-provisioned usage datasource

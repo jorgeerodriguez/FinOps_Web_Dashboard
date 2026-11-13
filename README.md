@@ -21,13 +21,14 @@ anomaly review, orphaned account/project audits, a month-to-date view, and print
 | **Next Year Forecast** | Low/Base/High budget forecast per provider, bottom-up by account/project, quarterly & monthly budget tables, reconciliation, growth drivers, anomaly review with an in-app **rules editor**, look-back of last year's forecast |
 | **Marketplace** | Contract renewal calendar (billed vs scheduled), quarterly commitments, price change vs the prior 12 months, renewal watch |
 | **Equinix** (Other platforms) | Equinix Fabric and Network Edge spend, **independent of AWS and GCP** (not in the cloud totals or budgets): monthly charges by category, run-rate, latest month by item, what changed since last month (new / ended / higher / lower lines), credits kept separate, and an HTML report. A one-line summary also appears on the Executive Summary |
+| **Grafana Cloud** (Other platforms) | Grafana Cloud usage cost, **independent of AWS and GCP**: monthly cost by product with the month in progress shown as an estimate, change vs last month and vs budget, the **prepaid commit** (remaining, runway at the recent burn, vs the contract end), volume drivers (active series, logs, traces, users), who uses Grafana (active users, dashboards viewed, activity by folder), a reconciliation of reported cost against the commit drawdown, and an HTML report |
 | **Relationships** | Sankey (owner → account/project → service) and concentration matrix |
 | **Insights & Savings** | **Savings ledger** (sustained step-downs vs each line's own peak, realized to date, shutdowns, savings that came back, one-offs excluded) on an account, service or **project-code** lens, with where the savings landed by project code / environment / cost center; **scorecard** by owner, project code or cost center with a per-group review and a printable **review pack**; **opportunities** (non-prod as big as prod, steady always-on lines, credits); spikes, new spend and creeping growth with finance notes; ownership and **Finance gaps** |
 | **Orphaned Accounts & Projects** | Cost-based screening plus an optional deep audit (access and activity) for AWS and GCP |
 | **Data Health** | Refresh buttons (your credentials), refresh history, data gaps, an **owners editor** (assign owners and Finance codes to accounts / projects, including ones billing but missing from the file) with the **cloud tags** AWS and GCP already carry shown beside each row, tag coverage, and each account's lifecycle **status** (New · Active · Idle · Deleted · Orphan · Remove) |
 
 Every page that matters for leadership has a **Build HTML report** button: self-contained, light theme, landscape Letter,
-print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar, Equinix).
+print to PDF from any browser (Executive Summary, Two-Year History, Next Year Forecast, Marketplace calendar, Equinix, Grafana).
 
 ## Design principles
 
@@ -164,7 +165,7 @@ python -m pytest                        # ~8 s: unit tests of the calculation la
 
 - Tests run on **synthetic data only** (`tests/synth.py`), through `FINOPS_CONFIG`, so they never read your `config.toml` or `data/`.
   They cover the savings ledger, history/one-off detection, forecasting, the Marketplace contract calendar, the project / environment tables and reports, the cloud-tag tables and editors, the month-to-date
-  projection, the store, the Equinix billing normalisation and collector (against a faked API), every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
+  projection, the store, the Equinix and Grafana collectors (against faked APIs), the commit runway and reconciliation, every page (with data and on a brand-new empty install) and every HTML report. A GitHub Action runs them on each push.
 - `requirements.txt` holds compatible ranges (the major versions tested); `requirements.lock` holds the exact versions
   (`pip install -r requirements.lock` for a reproducible install). Raise a cap only after the tests pass on the new major.
 
@@ -207,6 +208,20 @@ Equinix is billed on its own, so it has its own page under **Other platforms** a
   shown on their own and never counted as lower charges, run-rate reductions or savings. Run-rate is the recurring total on the latest invoice.
 - Item names come from matching the UUID on each invoice line to your Fabric connections, Cloud Routers and Network Edge nodes (best effort; Equinix truncates some names).
 - Utilization, right-sizing and BGP reliability are not on this page; they need the Equinix SDK and stay in the standalone Equinix report.
+
+### Other platforms (Grafana Cloud)
+
+Same pattern as Equinix: its own page and store (`data/grafana_costs.parquet`, `grafana_drivers.parquet`, `grafana_balance.parquet`, `grafana_facts.json`), never mixed into the cloud totals.
+
+- **Refresh:** Data Health → *Refresh Grafana* (or `python -m ingest.grafana`), about a minute. Read-only queries to the stack's `grafanacloud-usage` datasource (and
+  `grafanacloud-usage-insights` for activity counts) through the Grafana datasource proxy. Grafana keeps about 400 days, so each refresh adds to the saved history.
+- **Credentials:** a **stack service-account token** (`GRAFANA_STACK_TOKEN`, read access to datasources) in the environment or the env file named in `[grafana] env_file`,
+  and `[grafana] url`. No Cloud Access Policy token and no billing scope are needed. Held in memory only and removed from error text.
+- **Cost model:** the `grafanacloud_org_*_overage` metrics are running USD amounts for the billing month, so a month's last value is its cost, and the per-product values add up to
+  Grafana's own total. These are **Grafana-reported usage costs, not invoices**; the month in progress is a running estimate and is labelled as one. The page checks every month against the
+  drop in the prepaid commit balance (normally well under 1%).
+- **Commit runway:** remaining balance divided by the last 3 complete months' average, compared with the contract end date.
+- **Limits:** the usage metrics have no team label, so cost cannot be split by team. Activity is counts only (no user names or ids); an unviewed dashboard has no dollar cost, so no saving is claimed for it.
 
 ### Cloud tags and Finance codes
 

@@ -5,6 +5,7 @@ Parquet files in the data folder, and its own refresh log. Credentials are read 
 environment, held in memory only, and never written anywhere by the dashboard."""
 from __future__ import annotations
 import getpass
+import json
 import os
 from datetime import datetime
 from pathlib import Path
@@ -40,6 +41,18 @@ def merge_months(name: str, new: pd.DataFrame, columns: list[str], month_col: st
     out = pd.concat([keep, new], ignore_index=True).sort_values(month_col).reset_index(drop=True)
     out.to_parquet(data_dir() / f"{name}.parquet", index=False)
     return out
+
+
+def read_json(name: str) -> dict:
+    p = data_dir() / f"{name}.json"
+    try:
+        return json.loads(p.read_text()) if p.exists() else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def write_json(name: str, obj: dict) -> None:
+    (data_dir() / f"{name}.json").write_text(json.dumps(obj, indent=1, default=str))
 
 
 # ---------------------------------------------------------------------------------------------- refresh log

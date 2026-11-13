@@ -16,9 +16,21 @@ def _equinix() -> dict | None:
                 delta="" if pd.isna(mom) else "no change vs prior month" if abs(d["now"] - d["before"]) < 0.5 else f"{mom:+.1%} vs prior month", page="views/equinix.py")
 
 
+def _grafana() -> dict | None:
+    from . import grafana as gf
+    d = gf.summarize(gf.read(), 0.0)
+    if d is None:
+        return None
+    mom = gf.pct(d["now"], d["before"])
+    cs = d["commit"]
+    return dict(name="Grafana Cloud", month=d["last"], value=d["now"], fmt=gf.money, run_rate=d["total"].tail(3).mean(), last12=d["last12"],
+                delta="" if pd.isna(mom) else "no change vs prior month" if abs(d["now"] - d["before"]) < 0.5 else f"{mom:+.1%} vs prior month", page="views/grafana.py",
+                note=(f" Commit remaining {money(cs['balance'])}." if cs else ""))
+
+
 def summaries() -> list[dict]:
     out = []
-    for fn in (_equinix,):
+    for fn in (_equinix, _grafana):
         try:
             s = fn()
         except Exception:                      # a broken platform file must never take the Executive page down
@@ -34,8 +46,8 @@ def executive_strip() -> None:
         return
     st.subheader("Other platforms (not in the cloud totals or budget)")
     for col, s in zip(st.columns(max(len(items), 2)), items):
-        col.metric(f"{s['name']} — {s['month']:%b %Y}", money(s["value"]), s["delta"] or None, delta_color="inverse",
-                   help=f"Run-rate {money(s['run_rate'])} a month · {money(s['last12'])} over the last 12 months. Independent of AWS and GCP.")
+        col.metric(f"{s['name']} — {s['month']:%b %Y}", s.get("fmt", money)(s["value"]), s["delta"] or None, delta_color="inverse",
+                   help=f"Run-rate {money(s['run_rate'])} a month · {money(s['last12'])} over the last 12 months.{s.get('note', '')} Independent of AWS and GCP.")
         try:
             col.page_link(s["page"], label=f"Open {s['name']}")
         except Exception:                      # not under st.navigation (tests, embedded runs): the metric is enough
