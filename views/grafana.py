@@ -51,9 +51,48 @@ if fd is not None:
     st.subheader("What drives the cost (volume)")
     show(fd, width="stretch")
     st.caption("Monthly averages of the daily volume. Grafana bills metrics on the 95th percentile of active series, so a short spike matters less than a sustained rise.")
-    sv = d["facts"].get("recommended_savings_series")
-    if sv:
-        st.caption(f"Grafana's own recommendations estimate about **{sv:,.0f} active series** could be saved (Adaptive Metrics). That is a lead to review, not a confirmed saving.")
+
+uc = gf.unit_costs(d)
+if uc is not None:
+    st.markdown("**Unit costs** — separates *we used more* from *it got more expensive*")
+    st.dataframe(gf.unit_display(uc).style.format("${:,.2f}", na_rep="–"), width="stretch")
+    note = gf.unit_note(d, uc)
+    if note:
+        st.markdown(f"- {note}")
+    st.caption("Cost of a month's product divided by that month's average volume. The metrics row is approximate because metrics are billed on the 95th percentile.")
+
+lv = gf.log_view(d["logs"])
+if lv is not None:
+    st.subheader("Logs by service")
+    for t in gf.log_findings(lv):
+        st.markdown(f"- {t}")
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        st.dataframe(gf.log_display(lv), hide_index=True, width="stretch", height=360)
+    with c2:
+        show(gf.fig_log_daily(lv), width="stretch")
+    st.caption(f"Loki index volume for {lv['days']} days ({lv['first']:%b %d} to {lv['last']:%b %d}). Index volume is *stored* bytes, a fraction of what is billed, so use it for **relative shares and trends**, not dollars. "
+               "Loki keeps only about 31 days, so each refresh adds days to what is saved here. Team labels cover under 1% of the volume, so this is by service, not by team.")
+elif d["logs"] is not None and len(d["logs"]):
+    st.caption(f"Logs by service needs at least {gf.MIN_LOG_DAYS} days of volume; refresh again later.")
+
+av = gf.adaptive_view(d["adaptive"], d["facts"].get("active_series_now"))
+if av is not None:
+    st.subheader("Adaptive Metrics — largest reductions")
+    pct = f" (**{av['pct_of_active']:.1%}** of the {d['facts']['active_series_now']:,.0f} active series)" if pd.notna(av["pct_of_active"]) else ""
+    st.markdown(f"- Grafana's recommendations could remove about **{av['reducible']:,} series**{pct}; the top {len(av['top'])} metrics are {av['top_share']:.0%} of that. "
+                f"Existing aggregation rules already cut these {av['metrics']:,} metrics from {av['raw']:,} raw series to {av['current']:,}, so what is left is small next to the whole.")
+    if av["unused_series"]:
+        st.markdown(f"- **{av['unused_series']:,} series** sit in metrics with no dashboard, rule or query using them: the safest ones to review first.")
+    st.dataframe(gf.adaptive_display(av["top"]), hide_index=True, width="stretch")
+    st.caption("A lead to review with the owners, not a confirmed saving: applying a recommendation changes which series exist. Metric and label names only; no sample data is read.")
+elif d["facts"].get("recommended_savings_series"):
+    sv, act_now = d["facts"]["recommended_savings_series"], d["facts"].get("active_series_now")
+    st.caption(f"Grafana's own recommendations estimate about **{sv:,.0f} active series** could be saved" + (f" ({sv / act_now:.1%} of {act_now:,.0f})" if act_now else "")
+               + ". A lead to review, not a confirmed saving.")
+
+for n in d["facts"].get("notes") or []:
+    st.caption(f"Not collected: {n}")
 
 act = d["facts"].get("activity") or {}
 if act.get("active_users") or act.get("folders_30d"):

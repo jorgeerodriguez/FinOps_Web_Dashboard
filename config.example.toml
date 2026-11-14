@@ -84,3 +84,7 @@ hide_notes = ["IAM Identity Center not readable"]
 # env_file = ".env"                        # default: .env next to the app. Key: GRAFANA_STACK_TOKEN (a read-only service-account token)
 # monthly_budget = 0                       # optional: draws a budget line and "over / under" in the findings
 # usage_datasource = "grafanacloud-usage"  # the stack's pre-provisioned usage datasource
+# logs_datasource = "grafanacloud-logs"    # Loki datasource used for per-service log volume (stack token; about 31 days of history)
+# Optional: Adaptive Metrics recommendations. Needs GRAFANA_CLOUD_TOKEN (a Cloud Access Policy token with the Adaptive Metrics read scopes) in the env file.
+# adaptive_url = "https://prometheus-prod-XX-prod-REGION.grafana.net/aggregations/.."   # your Mimir endpoint, host only (no path)
+# adaptive_instance_id = ""                # the Mimir tenant id (the usage metrics' "id" label)

@@ -10,8 +10,8 @@ Credentials come from the process environment or the env file named in config.to
     python -m ingest.grafana
 """
 from __future__ import annotations
+import base64
 import json
-import re
 import sys
 import time
 import urllib.error
@@ -24,7 +24,7 @@ import pandas as pd
 from finops import grafana as gf
 from finops import platforms
 
-KEYS = ["GRAFANA_STACK_TOKEN", "GRAFANA_URL"]
+KEYS = ["GRAFANA_STACK_TOKEN", "GRAFANA_URL", "GRAFANA_CLOUD_TOKEN"]
 PREFIX, TOTAL = "grafanacloud_org_", "grafanacloud_org_total_overage"
 HISTORY_DAYS = 400
 RETRIES = 4
@@ -35,19 +35,20 @@ class GrafanaError(RuntimeError):
 
 
 class Client:
-    def __init__(self, url: str, token: str):
+    def __init__(self, url: str, token: str, basic_user: str | None = None):
         if not token:
             raise GrafanaError("No Grafana token. Put GRAFANA_STACK_TOKEN (a read-only service-account token) in the env file "
                                "(config.toml [grafana] env_file) or the environment.")
         if not url:
             raise GrafanaError("No Grafana URL. Set [grafana] url in config.toml (for example https://yourorg.grafana.net) or GRAFANA_URL.")
         self.url, self.token = url.rstrip("/"), token
+        self.auth = ("Basic " + base64.b64encode(f"{basic_user}:{token}".encode()).decode()) if basic_user else f"Bearer {token}"
 
     def get(self, path: str, params: dict | None = None):
         full = self.url + path + ("?" + urllib.parse.urlencode(params) if params else "")
         delay = 1.0
         for attempt in range(RETRIES + 1):
-            req = urllib.request.Request(full, headers={"Authorization": f"Bearer {self.token}"})
+            req = urllib.request.Request(full, headers={"Authorization": self.auth})
             try:
                 with urllib.request.urlopen(req, timeout=60) as r:
                     return json.load(r)
@@ -177,6 +178,36 @@ def collect_activity(c: Client) -> dict:
     return out
 
 
+def collect_log_volume(c: Client, uid: str, now: datetime) -> pd.DataFrame:
+    """Daily index volume (GiB) per service for the days Loki still holds (about 31). Index volume is STORED bytes: use it for relative shares only."""
+    path = f"/api/datasources/proxy/uid/{uid}/loki/api/v1/index/volume"
+    rows = []
+    for back in range(gf.LOG_DAYS, 0, -1):                              # complete days only: yesterday and the 30 before it
+        day = (now - timedelta(days=back)).replace(hour=0)
+        start = datetime(day.year, day.month, day.day, tzinfo=UTC)
+        data = c.get(path, {"query": '{service_name=~".+"}', "start": int(start.timestamp()), "end": int((start + timedelta(days=1)).timestamp()),
+                            "limit": 5000, "aggregateBy": "series"})
+        per: dict[str, float] = {}
+        for r in data["data"]["result"]:
+            name = r["metric"].get("service_name") or "(unlabelled)"
+            per[name] = per.get(name, 0.0) + float(r["value"][1]) / 1024**3
+        rows += [dict(day=pd.Timestamp(day.date()), service=k, gib=v) for k, v in per.items() if v > 0]
+    return pd.DataFrame(rows, columns=gf.LOG_COLS)
+
+
+def collect_adaptive(url: str, instance_id: str, token: str) -> pd.DataFrame:
+    """Adaptive Metrics recommendations (series counts and metric / label names only; no samples). Needs a Cloud Access Policy token."""
+    c = Client(url, token, basic_user=instance_id)
+    rows = c.get("/aggregations/recommendations", {"verbose": "true"})
+    out = []
+    for r in rows:
+        out.append(dict(metric=str(r["metric"]), action=str(r.get("recommended_action", "")), raw=int(r.get("raw_series_count") or 0),
+                        current=int(r.get("current_series_count") or 0), recommended=int(r.get("recommended_series_count") or 0),
+                        drop_labels=",".join(str(x) for x in r.get("drop_labels") or ()), aggregations=",".join(str(x) for x in r.get("aggregations") or ()),
+                        in_rules=int(r.get("usages_in_rules") or 0), in_dashboards=int(r.get("usages_in_dashboards") or 0), in_queries=int(r.get("usages_in_queries") or 0)))
+    return pd.DataFrame(out, columns=gf.ADAPT_COLS)
+
+
 def refresh() -> int:
     cfg = platforms.section("grafana")
     creds, where = platforms.credentials("grafana", KEYS)
@@ -199,7 +230,30 @@ def refresh() -> int:
         facts["activity"] = collect_activity(c)
     except GrafanaError as e:
         facts["activity"] = {"notes": [str(e)]}
-    gf.save(costs, drivers, bal, facts)
+    notes: list[str] = []
+    logs = pd.DataFrame(columns=gf.LOG_COLS)
+    try:
+        print("[logs] per-service volume, about 31 days (index only) …", flush=True)
+        logs = collect_log_volume(c, cfg.get("logs_datasource", "grafanacloud-logs"), now)
+        print(f"[logs] {logs['service'].nunique()} services, {logs['day'].nunique()} days", flush=True)
+    except GrafanaError as e:
+        notes.append(f"Logs by service: {e}")
+        print(f"[logs] skipped ({e})", flush=True)
+    adaptive = None
+    ad_url, ad_id, ad_tok = cfg.get("adaptive_url"), cfg.get("adaptive_instance_id"), creds.get("GRAFANA_CLOUD_TOKEN", "")
+    if not (ad_url and ad_id and ad_tok):
+        notes.append("Adaptive Metrics: set [grafana] adaptive_url and adaptive_instance_id, and GRAFANA_CLOUD_TOKEN (a Cloud Access Policy token with the Adaptive Metrics read scopes).")
+        print("[adaptive] skipped (not configured)", flush=True)
+    else:
+        try:
+            print("[adaptive] metric recommendations …", flush=True)
+            adaptive = collect_adaptive(str(ad_url), str(ad_id), ad_tok)
+            print(f"[adaptive] {len(adaptive)} metrics", flush=True)
+        except GrafanaError as e:
+            notes.append(f"Adaptive Metrics: {e}")
+            print(f"[adaptive] skipped ({e})", flush=True)
+    facts["notes"] = notes
+    gf.save(costs, drivers, bal, facts, logs, adaptive)
     total = float(costs[costs["component"].ne("total")]["cost"].sum())
     platforms.log_refresh(gf.PLATFORM, costs["month"].min(), costs["month"].max(), len(costs), total, f"{costs['component'].nunique()} components")
     print(f"[done] {len(costs)} cost rows, {costs['month'].min():%Y-%m} to {costs['month'].max():%Y-%m}", flush=True)

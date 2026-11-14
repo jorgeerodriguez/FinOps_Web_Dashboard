@@ -43,6 +43,11 @@ def merge_months(name: str, new: pd.DataFrame, columns: list[str], month_col: st
     return out
 
 
+def write(name: str, df: pd.DataFrame) -> None:
+    """Replace a whole table (a snapshot, not a month-by-month history)."""
+    df.to_parquet(data_dir() / f"{name}.parquet", index=False)
+
+
 def read_json(name: str) -> dict:
     p = data_dir() / f"{name}.json"
     try:

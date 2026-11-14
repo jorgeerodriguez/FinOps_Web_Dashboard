@@ -221,6 +221,13 @@ Same pattern as Equinix: its own page and store (`data/grafana_costs.parquet`, `
   Grafana's own total. These are **Grafana-reported usage costs, not invoices**; the month in progress is a running estimate and is labelled as one. The page checks every month against the
   drop in the prepaid commit balance (normally well under 1%).
 - **Commit runway:** remaining balance divided by the last 3 complete months' average, compared with the contract end date.
+- **Unit costs:** each product's monthly cost divided by its average volume (per 1K series, per GB of logs, per user), plus a one-line verdict on whether a logs jump is **volume or price**.
+  The metrics row is approximate because metrics are billed on the 95th percentile.
+- **Logs by service:** relative shares of log volume per service, the days that grew most, and a daily stacked chart, from Loki's index-volume endpoint (stack token). Index volume is *stored* bytes,
+  a fraction of what is billed, so it shows shares and trends, never dollars. Loki keeps only about 31 days, so each refresh adds days to the saved history; the view needs at least 14 days.
+- **Adaptive Metrics (optional):** Grafana's per-metric recommendations: series that could be removed (shown as a share of active series, usually small because existing aggregation rules already did
+  most of the work), the top metrics, labels to drop, and whether dashboards, rules or queries use each one. Needs `GRAFANA_CLOUD_TOKEN` (a Cloud Access Policy token with the Adaptive Metrics read
+  scopes) plus `adaptive_url` and `adaptive_instance_id` in `[grafana]`. If any is missing or refused, that part is skipped with a note and the rest of the refresh still works. Metric and label names only.
 - **Limits:** the usage metrics have no team label, so cost cannot be split by team. Activity is counts only (no user names or ids); an unviewed dashboard has no dollar cost, so no saving is claimed for it.
 
 ### Cloud tags and Finance codes

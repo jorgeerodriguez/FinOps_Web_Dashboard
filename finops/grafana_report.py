@@ -40,6 +40,29 @@ def build_report(data: dict, budget: float = 0.0) -> str:
         r.parts.append("<h3>What drives the cost (volume)</h3>")
         r.chart(fd, W, 230)
 
+    uc = gf.unit_costs(d)
+    if uc is not None:
+        r.section("Unit costs", new_page=True)
+        r.table(gf.unit_display(uc, 4).map(lambda v: f"${v:,.2f}" if pd.notna(v) else "–").reset_index().rename(columns={"month": "Month"}))
+        note = gf.unit_note(d, uc)
+        if note:
+            r.small(note)
+        r.caption("Cost divided by average volume. The metrics row is approximate (metrics are billed on the 95th percentile).")
+
+    lv = gf.log_view(d["logs"])
+    if lv is not None:
+        r.section("Logs by service", new_page=uc is None)
+        r.bullets(gf.log_findings(lv))
+        r.columns([r.table_html(gf.log_display(lv)), r.figure(gf.fig_log_daily(lv), 520, 300)], [W - 530, 530])
+        r.caption(f"Loki index volume, {lv['days']} days to {lv['last']:%b %d}. Stored bytes, a fraction of what is billed: use for relative shares and trends, not dollars.")
+
+    av = gf.adaptive_view(d["adaptive"], d["facts"].get("active_series_now"))
+    if av is not None:
+        r.section("Adaptive Metrics — largest reductions")
+        pct = f" ({av['pct_of_active']:.1%} of active series)" if pd.notna(av["pct_of_active"]) else ""
+        r.small(f"Grafana's recommendations could remove about **{av['reducible']:,} series**{pct}. A lead to review with owners, not a confirmed saving.")
+        r.table(gf.adaptive_display(av["top"].head(8)))
+
     act = d["facts"].get("activity") or {}
     if act.get("active_users") or act.get("dashboards_total") is not None:
         r.section("Who uses Grafana (activity, not cost)")

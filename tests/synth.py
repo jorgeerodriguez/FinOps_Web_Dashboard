@@ -116,6 +116,25 @@ def make_grafana():
     return costs, drivers, balance, facts
 
 
+def make_grafana_extras():
+    """Synthetic per-service log volume (31 days; svc-a grows in the last week) and Adaptive Metrics recommendations."""
+    from finops import grafana as gf
+    days = pd.date_range(end=pd.Timestamp("2026-11-13"), periods=31, freq="D")
+    rows = []
+    for i, d in enumerate(days):
+        grow = 6.0 if i >= 24 else 0.0
+        for svc, base in {"svc-a": 20.0 + grow, "svc-b": 10.0, "svc-c": 5.0, "svc-d": 1.0}.items():
+            rows.append(dict(day=d, service=svc, gib=base))
+    logs = pd.DataFrame(rows, columns=gf.LOG_COLS)
+    ad = pd.DataFrame([
+        dict(metric="m_big_bucket", action="update", raw=90_000, current=20_000, recommended=10_000, drop_labels="pod,instance,zone,node", aggregations="sum", in_rules=0, in_dashboards=0, in_queries=3),
+        dict(metric="m_mid", action="update", raw=9_000, current=4_000, recommended=3_000, drop_labels="pod", aggregations="sum", in_rules=1, in_dashboards=2, in_queries=0),
+        dict(metric="m_unused", action="update", raw=2_000, current=1_000, recommended=0, drop_labels="", aggregations="", in_rules=0, in_dashboards=0, in_queries=0),
+        dict(metric="m_keep", action="keep", raw=500, current=500, recommended=500, drop_labels="", aggregations="", in_rules=0, in_dashboards=1, in_queries=1),
+    ], columns=gf.ADAPT_COLS)
+    return logs, ad
+
+
 def write_config(path: Path, data_dir: Path) -> Path:
     path.write_text(f"""
 [fiscal]
@@ -170,4 +189,7 @@ def make_env(root: Path, with_data: bool = True, n_months: int = 27) -> Path:
         gd.to_parquet(data / "grafana_drivers.parquet", index=False)
         gb.to_parquet(data / "grafana_balance.parquet", index=False)
         (data / "grafana_facts.json").write_text(json.dumps(gfacts))
+        gl, ga = make_grafana_extras()
+        gl.to_parquet(data / "grafana_logs.parquet", index=False)
+        ga.to_parquet(data / "grafana_adaptive.parquet", index=False)
     return write_config(root / "config.toml", data)
