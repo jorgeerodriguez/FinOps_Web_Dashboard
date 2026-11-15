@@ -250,3 +250,41 @@ def test_page_offers_every_grouping_and_model_without_error():
         assert not at.exception, (dim, model, win, [e.value[:200] for e in at.exception])
     [c for c in at.checkbox if c.label == "Reconcile to top-down"][0].check().run()
     assert not at.exception
+
+
+# ------------------------------------------------------------------------------------------ HTML report
+def test_report_carries_the_grouping_model_and_window_chosen_on_the_page(df, ny):
+    from finops import nextyear_report as R
+    from finops import nextyear_summary as nys
+    b, assumed = nys.default_budgets(ny.fy)
+    budgets = {"AWS": b["AWS"], "GCP": b["GCP"]}
+    bu = {sc: B.run(df, ny, "project_code", sc, "Ensemble", 18, 6, reconcile=True) for sc in B.SCOPES}
+    html = R.build_report(ny, budgets, assumed, None, bu)
+    assert "by project code (bottom-up)" in html and "Grouped by:" in html and "Ensemble" in html and "last 18 months" in html
+    assert "reconciled to the top-down total" in html and "AWS + GCP together" in html
+    plain = R.build_report(ny, budgets, assumed, None)                          # no selection: the original account / project report
+    assert "by account and by project (bottom-up)" in plain and "Grouped by:" not in plain
+
+
+def test_report_by_account_has_no_combined_page(df, ny):
+    from finops import nextyear_report as R
+    from finops import nextyear_summary as nys
+    b, assumed = nys.default_budgets(ny.fy)
+    bu = {sc: B.run(df, ny, "account", sc, "Auto", 12, 6) for sc in B.SCOPES}
+    html = R.build_report(ny, {"AWS": b["AWS"], "GCP": b["GCP"]}, assumed, None, bu)
+    assert "AWS accounts" in html and "AWS + GCP together" not in html
+
+
+# ------------------------------------------------------------------------------------------ Month to Date chart
+def test_month_to_date_chart_uses_three_distinct_colours_and_readable_hover(billing):
+    from finops import asnow
+    from finops.asnow_charts import budget_chart
+    a = asnow.compute(billing)
+    if a is None:
+        pytest.skip("synthetic data has no in-progress month")
+    fig = budget_chart(a)
+    bars = [t for t in fig.data if t.type == "bar"]
+    colors = [t.marker.color for t in bars]
+    assert len(bars) == 3 and len(set(colors)) == 3 and all(isinstance(c, str) for c in colors)         # one colour per bar series, so the legend matches the bars
+    assert "#94a3b8" not in colors                                                                          # the old grey
+    assert fig.layout.hoverlabel.bgcolor == "#ffffff" and fig.layout.hovermode == "x unified"

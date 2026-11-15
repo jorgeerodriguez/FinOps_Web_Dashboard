@@ -216,11 +216,12 @@ with st.expander("Method & caveats"):
 # ----------------------------------------------------------------------------- HTML report
 st.divider()
 st.subheader("HTML report")
-st.caption("Self-contained, print-ready (light theme, landscape Letter). Uses the **budgets and number of modelled lines set in the sidebar**; "
-           "tables show the Base scenario. Open it in a browser and use *Print → Save as PDF* for a PDF.")
+st.caption("Self-contained, print-ready (light theme, landscape Letter). Uses the **budgets and number of modelled lines set in the sidebar** and the "
+           "**grouping, model and training window chosen in the bottom-up section**; tables show the Base scenario. Open it in a browser and use *Print → Save as PDF* for a PDF.")
 if st.button("Build HTML report", key="ny_report_btn"):
     with st.spinner("Building report…"):
-        html = build_report(ny, budgets, assumed, lb)
+        chosen = {sc: _bottom_up(dim, sc, model, window, top_n, adjust, reconcile, float(len(df_all))) for sc in bu_mod.SCOPES}
+        html = build_report(ny, budgets, assumed, lb, chosen)
         path = save_report(html, ny)
     st.session_state["ny_report"] = (html, path.name, str(path))
 if "ny_report" in st.session_state:

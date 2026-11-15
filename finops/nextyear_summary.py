@@ -251,7 +251,7 @@ def bu_text(bu, fmt_money=None) -> str:
         out += ("Close: the two methods agree. " if abs(diff) < 0.08 else
                 "A gap this size means some groups' models extrapolate harder than the provider total (usually a few large groups each carrying the trend) — "
                 "review the Low-confidence lines, or tick *Reconcile to top-down*. ")
-    if bu.not_set and bu.not_set_share > 0:
+    if bu.not_set and bu.not_set_share >= 0.005:
         out += f"**{bu.not_set_share:.0%}** of the last 12 months' spend has no value for this field and sits in its own line (“{bu.not_set}”)."
     return out
 

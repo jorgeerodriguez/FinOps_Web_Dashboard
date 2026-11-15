@@ -15,7 +15,8 @@ from .ui import money
 W = PAGE_W - 40
 
 
-def build_report(ny: NextYear, budgets: dict, assumed: bool = False, lookback: dict | None = None) -> str:
+def build_report(ny: NextYear, budgets: dict, assumed: bool = False, lookback: dict | None = None, bu: dict | None = None) -> str:
+    """bu: optional {scope: BottomUp} for AWS, GCP and AWS + GCP (the grouping, model and window chosen on the page); default = by account / project."""
     fy = ny.fy
     sm = nys.summarize(ny, budgets)
     r = Report(f"FY{fy} Cloud Budget Forecast",
@@ -75,18 +76,43 @@ def build_report(ny: NextYear, budgets: dict, assumed: bool = False, lookback: d
     r.caption("Left: Services + Marketplace by month (solid = billed, light = forecast). Right: the provider-level (top-down) forecast against the sum of the "
               "per-account / per-project (bottom-up) models.")
 
-    # ---- accounts / projects: both share charts on one page, then a table page per provider
-    r.section("Where FY%s lands — by account and by project (bottom-up)" % fy, new_page=True)
-    r.caption(nys.ACCOUNT_CAPTION)
+    # ---- bottom-up: both share charts on one page, (combined page for cross-cloud groupings), then a table page per provider
+    if bu:
+        ref = bu["AWS"]
+        title = f"Where FY{fy} lands — by {ref.label.lower()} (bottom-up)"
+        pick = (f"<b>Grouped by:</b> {ref.label} · <b>Model:</b> {ref.model} · <b>Training window:</b> "
+                f"{'all billed months' if not ref.window else f'last {ref.window} months'}" + (" · <b>reconciled to the top-down total</b>" if ref.scale != 1.0 else ""))
+    else:
+        title, pick = f"Where FY{fy} lands — by account and by project (bottom-up)", ""
+    r.section(title, new_page=True)
+    r.caption(nys.BU_CAPTION if bu else nys.ACCOUNT_CAPTION)
+    if pick:
+        r.parts.append(f"<p style='font-size:12px;margin:2px 0 6px'>{pick}</p>")
+    scopes = [("AWS", "AWS accounts" if not bu or bu["AWS"].dim == "account" else "AWS"),
+              ("GCP", "GCP projects" if not bu or bu["GCP"].dim == "account" else "GCP")]
+    tab = {p: (bu[p].table if bu else ny.tables[p]) for p, _ in scopes}
     cells = []
-    for p, label in (("AWS", "AWS accounts"), ("GCP", "GCP projects")):
-        t_ = ny.tables[p]
-        cells.append(f"<h3 style='margin-top:6px'>{label}</h3><p style='font-size:12px;margin:0 0 4px'>{md_(nys.account_text(ny, sm, p))}</p>"
-                     + r.figure(ch.accounts_share(t_, ny, p, 22), W // 2 - 6, 30 * min(len(t_), 14) + 60))
+    for p, label in scopes:
+        text = nys.bu_text(bu[p]) if bu else nys.account_text(ny, sm, p)
+        cells.append(f"<h3 style='margin-top:6px'>{label}</h3><p style='font-size:12px;margin:0 0 4px'>{md_(text)}</p>"
+                     + r.figure(ch.accounts_share(tab[p], ny, p, 22), W // 2 - 6, 30 * min(len(tab[p]), 14) + 60))
     r.columns(cells, [W // 2, W // 2])
-    for p, label in (("AWS", "AWS accounts"), ("GCP", "GCP projects")):
+    if bu and ref.dim != "account" and bu.get("AWS + GCP") is not None and len(bu["AWS + GCP"].table):
+        both = bu["AWS + GCP"]
+        r.section(f"AWS + GCP together — by {ref.label.lower()}", new_page=True, flow=True)
+        r.parts.append(f"<p style='font-size:12px;margin:0 0 4px'>{md_(nys.bu_text(both))}</p>")
+        r.parts.append(r.figure(ch.accounts_share(both.table, ny, "AWS + GCP", 30), W, 24 * min(len(both.table), 16) + 60))
+        r.table(nys.bu_display(both), index=True)
+    for p, label in scopes:
         r.section(f"{label} — FY{fy} forecast by line", new_page=True, flow=True)
-        r.table(nys.account_display(ny, p), index=True)
+        r.table(nys.bu_display(bu[p]) if bu else nys.account_display(ny, p), index=True)
+        if bu:
+            notes = sorted({lf.note for lf in bu[p].lines if lf.note})
+            if notes:
+                r.caption("† " + " · ".join(notes))
+            v = nys.model_verdict(bu[p])
+            if v:
+                r.caption(v.replace("**", ""))
 
     # ---- look-back
     if lookback is not None:
