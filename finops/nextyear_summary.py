@@ -199,13 +199,25 @@ ANOMALY_CAPTION = ("Lines that normally cost ≥ $3K/month but show near $0 in s
 ACCOUNT_CAPTION = ("Each account / project competes four models on a backtest (Flat, Damped, Linear, Holt); the simplest within 5% of the best wins. "
                    "Forecasts are capped at 2× and floored at 0.5× the exit run-rate.")
 
+BU_CAPTION = ("Cut the cloud bill by account, project code, owner, family, environment … (fields from your owner files), pick a model and a training window. "
+              "Every group is forecast on its own and the groups add up to the provider total: spend with no value for the field is its own “(not set)” line, "
+              "the smallest groups are summed into “All other”. Default = Account / project, Auto, last 12 months (unchanged).")
+
 METHOD_MD = """
 **Cloud Services (per provider).** Start = average of the last 3 billed months (exit run-rate). Trend = Theil-Sen slope of the last 12 billed
 months (median of all pairwise slopes, so one-off months don't distort it). *Low* = flat; *Base* = damped trend (momentum fades 15% each month);
 *High* = trend continues linearly. AWS Savings-Plan-fee gaps are added back for the trend only.
 
-**Accounts / projects.** Backtested model competition (Flat / Damped trend / Linear / Holt-ETS) per line; confidence = backtest error as a % of the
-exit run-rate (High < 10%, Medium < 25%). Range = ±1.28 × RMSE, widening with horizon.
+**Bottom-up by any grouping.** The Cloud Services bill is cut by the field you choose (account / project, project code, owner, account family,
+environment, service name, lifecycle status, cloud service, cost center, provider × environment) and every group is forecast on its own, then the
+groups are added up. Spend with no value for the field is kept as its own “(not set)” line and the smallest groups are summed into “All other”, so the
+groups always add up to the provider total. Savings-Plan fee gaps and reviewed add-backs are placed on the group that carries them.
+*Model*: **Auto** (default) backtests the models per group and keeps the simplest within 5% of the most accurate; or choose one model for every group:
+Flat, Damped trend, Linear, Holt (ETS), Ensemble (average of Flat, Damped and Holt), Seasonal naive × YoY, Seasonal profile, Holt-Winters.
+Every model is backtested on the same months (rolling origin, up to 3 months ahead); seasonal models are scored only when enough history exists.
+Confidence = backtest error as a % of the exit run-rate (High < 10%, Medium < 25%); range = ±1.28 × RMSE, widening with horizon; forecasts are capped at
+2× and floored at 0.5× the exit run-rate. *Training window*: 12 / 18 / 24 months or all billed months (the top-down forecast always uses 12).
+*Reconcile to top-down* scales every group by one factor so they add up to the top-down Base; each group keeps its share.
 
 **Marketplace.** Each contract repeats the billing cadence seen in the last 12 months (monthly, quarterly, annual …). Outside the Cloud Services budget.
 
@@ -218,8 +230,71 @@ shutdowns are real and are not adjusted.
 **Look-back.** The method is re-run as it would have run 12 months ago (data up to that month only, no reviewed adjustments) and compared with what
 was billed, so the ranges can be judged against a real result. The earlier months of history are drawn grey in the provider charts for context.
 
-**Caveats.** Only the latest 12 billed months feed the model. Two years of history is enough to show last year's pattern and to test the method, but not
-to estimate seasonality reliably (it would be confused with growth), so seasonality is still not modelled.
+**Caveats.** The top-down forecast and the default bottom-up use the latest 12 billed months. Two years of history is enough to show last year's pattern and
+to test the method, but not to estimate seasonality reliably (it is confused with growth): the seasonal models are offered, scored honestly on the leaderboard,
+and not used by Auto unless they win on the backtest. Longer training windows include GCP's launch ramp (Nov 2025 – Jan 2026).
 Annual Marketplace renewals assume the same price. New workloads or planned savings are not in the baseline — use the Forecast & Budget page's
 adjustment slider to layer them on.
 """
+
+
+# ------------------------------------------------------------------------------------------ bottom-up by any grouping
+def bu_text(bu, fmt_money=None) -> str:
+    """One paragraph above the table: how the groups compare with the top-down forecast, and how complete the grouping is."""
+    f = fmt_money or money
+    if bu.table is None or not len(bu.table):
+        return "No spend in this scope."
+    diff = bu.total / bu.topdown - 1 if bu.topdown else float("nan")
+    out = (f"Top-down {bu.scope} base **{f(bu.topdown)}** vs bottom-up by {bu.label.lower()} **{f(bu.total)}**"
+           + (f" — {pct(diff)} difference. " if bu.scale == 1.0 else " (reconciled to the top-down, so they match by construction). "))
+    if bu.scale == 1.0 and np.isfinite(diff):
+        out += ("Close: the two methods agree. " if abs(diff) < 0.08 else
+                "A gap this size means some groups' models extrapolate harder than the provider total (usually a few large groups each carrying the trend) — "
+                "review the Low-confidence lines, or tick *Reconcile to top-down*. ")
+    if bu.not_set and bu.not_set_share > 0:
+        out += f"**{bu.not_set_share:.0%}** of the last 12 months' spend has no value for this field and sits in its own line (“{bu.not_set}”)."
+    return out
+
+
+def bu_display(bu) -> pd.DataFrame:
+    t, fyc = bu.table, f"FY{bu.fy} forecast"
+    out = t.assign(**{c: t[c].map(money) for c in ["Last 12 mo", "Exit run-rate /mo", fyc, "Low", "High"]},
+                   **{"Δ vs exit × 12": t["Δ vs exit × 12"].map(lambda v: ("+" if v > 0 else "") + money(v))}, Share=t["Share"].map("{:.0%}".format))
+    return out
+
+
+def board_display(bu) -> pd.DataFrame:
+    """Backtest error (MAE / exit run-rate) per line and model. Lower is better; blank = that model could not be tested on the line."""
+    b = bu.board
+    if b is None or b.empty:
+        return pd.DataFrame()
+    num = [c for c in b.columns if c != "Used"]
+    out = b.copy()
+    for c in num:
+        out[c] = b[c].map(lambda v: "" if pd.isna(v) else f"{v:.1%}")
+    out = out[num + ["Used"]]
+    n = b.attrs.get("scored", {})
+    out.loc["Lines tested"] = [f"{n.get(c, 0)} of {b.attrs.get('lines', 0)}" for c in num] + [""]
+    return out
+
+
+def model_verdict(bu) -> str:
+    """Plain-language reading of the spend-weighted leaderboard row."""
+    b = bu.board
+    if b is None or b.empty:
+        return ""
+    w = b.loc["All lines (spend-weighted)"].drop("Used").astype(float).dropna()
+    n = b.attrs.get("scored", {})
+    full = [m for m in w.index if n.get(m, 0) == b.attrs.get("lines", 0)]            # compare only models tested on every line
+    if not full:
+        return ""
+    best = min(full, key=w.get)
+    used = sum(lf.scores.get(lf.model, np.nan) for lf in bu.lines if np.isfinite(lf.scores.get(lf.model, np.nan)))
+    anchor = sum(lf.actual.tail(3).mean() for lf in bu.lines if np.isfinite(lf.scores.get(lf.model, np.nan)))
+    mine = used / anchor if anchor else np.nan
+    txt = f"Backtest over {bu.lines[0].origins} months (spend-weighted): lowest error **{best}** at {w[best]:.1%}"
+    if bu.model == "Auto" and np.isfinite(mine):
+        txt += f"; the Auto mix scored {mine:.1%}"
+    elif bu.model != "Auto" and bu.model in w.index:
+        txt += f"; your selection **{bu.model}** scored {w[bu.model]:.1%}"
+    return txt + ". Error = average miss per month as a share of the exit run-rate; every model is scored on the same months."

@@ -11,7 +11,6 @@ Basis = the last 12 billed months. Earlier months (the dashboard holds ~2 years)
 (finops/history.py: lookback), not by the model itself.
 """
 from __future__ import annotations
-import warnings
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -22,11 +21,10 @@ from . import marketplace as mkt
 from .config import load_config, resolve
 from .schema import CLOUD, MARKETPLACE, TAX
 
-warnings.filterwarnings("ignore", category=RuntimeWarning, module=r"statsmodels\.")
-warnings.filterwarnings("ignore", category=UserWarning, module=r"statsmodels\.")
+from . import models as M
+from .models import DAMPING, theil_sen                      # re-exported: the pages / tests import them from here
 
-DAMPING = 0.85
-MODELS = ["Flat", "Damped trend", "Linear", "Holt (ETS)"]      # simplest first (tie-break order)
+MODELS = M.BASE                                              # the original four (simplest first); Auto may add the seasonal ones, see models.py
 TIE_TOLERANCE, GROWTH_CAP, DECLINE_FLOOR = 0.05, 2.0, 0.5
 BASIS_MONTHS = 12
 SCEN = ["Low", "Base", "High"]
@@ -34,33 +32,9 @@ SP_NAME = "Savings Plans for AWS Compute usage"
 PROVIDERS = ["AWS", "GCP"]
 
 
-def theil_sen(y) -> float:
-    v = np.asarray(y, dtype=float)
-    slopes = [(v[j] - v[i]) / (j - i) for i in range(len(v)) for j in range(i + 1, len(v))]
-    return float(np.median(slopes)) if slopes else 0.0
-
-
 # ------------------------------------------------------------------------------------------ line models
 def _predict(model: str, y: np.ndarray, h: int) -> np.ndarray:
-    steps = np.arange(1, h + 1)
-    anchor = y[-3:].mean() if len(y) >= 3 else y.mean()
-    if model == "Flat":
-        return np.full(h, anchor)
-    slope = theil_sen(y)
-    if model == "Damped trend":
-        return anchor + slope * np.cumsum(DAMPING ** steps)
-    if model == "Linear":
-        return anchor + slope * steps
-    if model == "Holt (ETS)":
-        from statsmodels.tsa.holtwinters import ExponentialSmoothing
-        with warnings.catch_warnings(), np.errstate(all="ignore"):
-            warnings.simplefilter("ignore")
-            fit = ExponentialSmoothing(y.astype(float), trend="add", damped_trend=True, initialization_method="estimated").fit()
-        out = np.asarray(fit.forecast(h), dtype=float)
-        if not np.isfinite(out).all():
-            raise ValueError("non-finite ETS forecast")
-        return out
-    raise ValueError(model)
+    return M._classic(model, np.asarray(y, dtype=float), h)
 
 
 def backtest(y: np.ndarray, model: str, min_train: int = 5, max_h: int = 3) -> np.ndarray:
@@ -83,6 +57,9 @@ class LineForecast:
     mape: float
     capped: bool = False
     floored: bool = False
+    note: str = ""                                      # why the chosen model was not used as asked / how the band was set
+    scores: dict = field(default_factory=dict)          # model -> backtest MAE (same months for every model)
+    origins: int = 0                                    # number of backtest months behind `scores`
 
     @property
     def confidence(self) -> str:
@@ -90,24 +67,42 @@ class LineForecast:
         return "Low" if not np.isfinite(e) or e >= 0.25 else ("Medium" if e >= 0.10 else "High")
 
 
+def _auto_pick(scores: dict) -> str:
+    """Simplest model (models.AUTO_POOL order) whose MAE is within TIE_TOLERANCE of the best."""
+    pool = {m: v for m, v in scores.items() if m in M.AUTO_POOL}
+    if not pool:
+        return "Flat"
+    mae = {m: v["mae"] for m, v in pool.items()}
+    if all(np.isnan(v) for v in mae.values()):
+        return next(m for m in M.AUTO_POOL if m in pool)
+    best = np.nanmin(list(mae.values()))
+    return next(m for m in M.AUTO_POOL if m in pool and (np.isnan(best) or mae[m] <= best * (1 + TIE_TOLERANCE) + 1e-9))
+
+
 def forecast_line(name: str, actual: pd.Series, horizon: pd.DatetimeIndex, force_model: str | None = None) -> LineForecast:
-    y = actual.to_numpy(dtype=float)
-    scores = {}
-    for m in MODELS:
-        try:
-            e = backtest(y, m)
-            if len(e):
-                scores[m] = dict(mae=float(np.mean(np.abs(e))), rmse=float(np.sqrt(np.mean(e ** 2))))
-        except Exception:
-            continue
-    if not scores:
-        scores = {"Flat": dict(mae=np.nan, rmse=0.0)}
-    best = np.nanmin([v["mae"] for v in scores.values()]) if not all(np.isnan(v["mae"]) for v in scores.values()) else 0
-    model = force_model or next((m for m in MODELS if m in scores and (np.isnan(best) or scores[m]["mae"] <= best * (1 + TIE_TOLERANCE) + 1e-9)), "Flat")
-    if model not in scores:
-        scores[model] = scores.get("Damped trend", next(iter(scores.values())))
-    pred = _predict(model, y, len(horizon))
-    anchor = y[-3:].mean()
+    """One line (an account, a project code ...): every model is backtested on the same months; `force_model` overrides the Auto pick.
+    A forced model that cannot be fitted (too little history) falls back to the Auto pick and says so in `note`."""
+    s = actual.astype(float)
+    sc = M.score(s)
+    scores = sc["table"] or {"Flat": dict(mae=np.nan, rmse=0.0)}
+    auto = _auto_pick(scores)
+    model, note = auto, ""
+    if force_model and force_model != "Auto":
+        if M.can_fit(force_model, s):
+            model = force_model
+        else:
+            note = f"{force_model} needs {M.MIN_TRAIN[force_model]}+ active months of history: used {auto} instead"
+    try:
+        pred = M.predict(model, s, len(horizon))
+    except Exception:
+        if model == auto:
+            raise
+        model, note = auto, f"{force_model} could not be fitted: used {auto} instead"
+        pred = M.predict(model, s, len(horizon))
+    if model not in scores:                              # fitted but not backtestable (e.g. Holt-Winters with < 28 months): borrow the Auto pick's error for the band
+        scores = {**scores, model: dict(mae=np.nan, rmse=scores[auto]["rmse"])}
+        note = note or f"{model} has too little history to be backtested: the range uses {auto}'s error"
+    anchor = s.to_numpy()[-3:].mean()
     capped = floored = False
     if anchor > 0 and pred.max() > GROWTH_CAP * anchor:
         pred, capped = np.minimum(pred, GROWTH_CAP * anchor), True
@@ -116,9 +111,10 @@ def forecast_line(name: str, actual: pd.Series, horizon: pd.DatetimeIndex, force
     pred = np.clip(pred, 0, None)
     rmse = scores[model]["rmse"]
     width = 1.28 * (0 if np.isnan(rmse) else rmse) * np.sqrt(np.arange(1, len(horizon) + 1))
+    mae = scores[model]["mae"]
     return LineForecast(name, actual, pd.Series(pred, horizon), pd.Series(np.clip(pred - width, 0, None), horizon),
-                        pd.Series(pred + width, horizon), model, scores[model]["mae"],
-                        scores[model]["mae"] / anchor if anchor else np.nan, capped, floored)
+                        pd.Series(pred + width, horizon), model, mae, mae / anchor if anchor else np.nan, capped, floored,
+                        note, {m: v["mae"] for m, v in scores.items()}, sc["origins"])
 
 
 def topdown(s: pd.Series, gap: pd.Series, horizon: pd.DatetimeIndex, trend_from: pd.Timestamp | None = None):
@@ -263,41 +259,11 @@ def build(df: pd.DataFrame, top_n: int = 12, apply_adjustments: bool = True) -> 
         base = ny.svc_actual[p].sum() + ny.mkt_actual[p].sum()
         ny.tax_rate[p] = float(tax.get(p, 0.0) / base) if base else 0.0
 
-    # per account / project lines (bottom-up), Savings-Plan add-back placed on the paying account
+    # per account / project lines (bottom-up): the same engine the page uses for every other grouping (finops/bottomup.py)
+    from . import bottomup
     for p in PROVIDERS:
-        rows = svc_rows[svc_rows.provider == p].copy()
-        if p == "GCP":
-            rows["account"] = rows["account"].replace({"(no project)": "Google Support (no project)"})
-        acc = rows.pivot_table(index="date", columns="account", values="cost_net", aggfunc="sum").reindex(basis).fillna(0.0)
-        gap = ny.normalization[p].reindex(basis).fillna(0.0)
-        if gap.sum() > 0:
-            sp_acc = rows[rows.service == SP_NAME].groupby("account")["cost_net"].sum()
-            if len(sp_acc) and sp_acc.sum() > 0:
-                for a, share in (sp_acc / sp_acc.sum()).items():
-                    acc[a] = acc[a] + gap * share
-        for r, g in rule_lines:                                    # reviewed add-backs go on the account that carries the line
-            if r.provider == p and r.account in acc.columns:
-                acc[r.account] = acc[r.account] + g
-        order = acc.sum().sort_values(ascending=False).index
-        top, rest = list(order[:top_n]), list(order[top_n:])
-        lines = [forecast_line(a, acc[a], horizon) for a in top if acc[a].sum() > 0]
-        if rest:
-            lines.append(forecast_line(f"All other ({len(rest)})", acc[rest].sum(axis=1), horizon, force_model="Damped trend"))
-        ny.lines[p] = lines
-        ytd_col = "Last 12 mo"
-        recs = []
-        for lf in lines:
-            exit_rr = lf.actual.tail(3).mean()
-            fyv = lf.forecast.loc[ny.months].sum()
-            recs.append({"Account / Project": lf.name, ytd_col: lf.actual.sum(), "Exit run-rate /mo": exit_rr,
-                         f"FY{fy} forecast": fyv, "Low": lf.lo.loc[ny.months].sum(), "High": lf.hi.loc[ny.months].sum(),
-                         "Δ vs exit × 12": fyv - exit_rr * 12,
-                         "Model": lf.model + (" (capped)" if lf.capped else "") + (" (floored)" if lf.floored else ""),
-                         "Confidence": f"{lf.confidence} (±{lf.mape:.0%})" if np.isfinite(lf.mape) else lf.confidence})
-        t = pd.DataFrame(recs).set_index("Account / Project")
-        if len(t):
-            t.insert(1, "Share", t[ytd_col] / t[ytd_col].sum())
-        ny.tables[p] = t
+        bu = bottomup.run(df, ny, "account", p, "Auto", BASIS_MONTHS, top_n)
+        ny.lines[p], ny.tables[p] = bu.lines, bu.table
 
     ny.anomalies = find_anomalies(svc_rows, basis, rules)
     return ny

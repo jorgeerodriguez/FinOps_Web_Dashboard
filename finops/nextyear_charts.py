@@ -9,6 +9,7 @@ from .nextyear import NextYear
 from .ui import COLORS, money
 
 INK, INK2, MUTED, AXIS, GRID = "#0f172a", "#334155", "#64748b", "#cbd5e1", "#e2e8f0"
+NEUTRAL = "#475569"                                       # lines that span both clouds
 MKT_COLOR = {"AWS": "#B45309", "GCP": "#7C3AED"}       # marketplace tints, distinct from the provider colors
 
 
@@ -118,9 +119,10 @@ def combined_chart(ny: NextYear, budgets: dict) -> go.Figure:
 
 
 def accounts_share(t: pd.DataFrame, ny: NextYear, p: str, label_len: int = 34) -> go.Figure:
+    """Horizontal bars of the FY forecast per line. p = AWS / GCP (provider colour) or anything else (neutral)."""
     col = f"FY{ny.fy} forecast"
     t = t.iloc[::-1]
-    fig = go.Figure(go.Bar(y=[_s(a, label_len) for a in t.index], x=t[col], orientation="h", marker=dict(color=COLORS[p]),
+    fig = go.Figure(go.Bar(y=[_s(a, label_len) for a in t.index], x=t[col], orientation="h", marker=dict(color=COLORS.get(p, NEUTRAL)),
                            text=[money(v) for v in t[col]], textposition="outside", textfont=dict(color=INK2, size=11),
                            hovertemplate="%{y}: %{x:$,.0f}<extra></extra>"))
     fig = _layout(fig, 28 * len(t) + 70, legend=False)
@@ -130,9 +132,9 @@ def accounts_share(t: pd.DataFrame, ny: NextYear, p: str, label_len: int = 34) -
     return fig
 
 
-def small_multiples(ny: NextYear, p: str, cols: int = 3) -> go.Figure:
-    lines = ny.lines[p]
-    color = COLORS[p]
+def small_multiples(ny: NextYear, p: str, cols: int = 3, lines: list | None = None) -> go.Figure:
+    lines = ny.lines[p] if lines is None else lines
+    color = COLORS.get(p, NEUTRAL)
     rows = int(np.ceil(len(lines) / cols))
     fig = make_subplots(rows=rows, cols=cols, subplot_titles=[f"{_s(lf.name, 28)} · {lf.model}" for lf in lines],
                         shared_xaxes=True, vertical_spacing=0.06 if rows > 4 else 0.1, horizontal_spacing=0.06)

@@ -2,6 +2,8 @@ import pandas as pd
 import streamlit as st
 from finops import editor_ui
 from finops import history as hist
+from finops import bottomup as bu_mod
+from finops import models as models_mod
 from finops import nextyear as ny_mod
 from finops import nextyear_charts as ch
 from finops import nextyear_summary as nys
@@ -22,7 +24,7 @@ if df_all.empty:
     st.stop()
 
 # ----------------------------------------------------------------------------- sidebar
-top_n = st.sidebar.slider("Accounts / projects modelled individually", 6, 20, 12)
+top_n = st.sidebar.slider("Groups modelled individually (largest first)", 6, 20, 12)
 scenario = st.sidebar.radio("Scenario for tables", ny_mod.SCEN, index=1)
 adjust = st.sidebar.checkbox("Apply reviewed anomaly adjustments", value=True,
                              help="Billing gaps you confirmed (data/anomaly_rules.csv) are added back to the trend, and GCP's trend skips its launch "
@@ -114,24 +116,65 @@ for col, p in ((d1, "AWS"), (d2, "GCP")):
         st.markdown(f"**{p}** — services by trend ($ added per month, per month)")
         st.dataframe(nys.drivers_display(ny, p), width="stretch")
 
-# ----------------------------------------------------------------------------- 7. accounts / projects
-st.subheader("By account and by project (bottom-up)")
-st.caption(nys.ACCOUNT_CAPTION)
-ta, tg = st.tabs(["AWS accounts", "GCP projects"])
-for tab, p in ((ta, "AWS"), (tg, "GCP")):
+# ----------------------------------------------------------------------------- 7. bottom-up by any grouping
+st.subheader("Bottom-up: forecast by any grouping")
+st.caption(nys.BU_CAPTION)
+
+
+@st.cache_data(show_spinner="Forecasting every group (backtesting each model)…")
+def _bottom_up(dim: str, scope: str, model: str, window: int, top_n: int, adjust: bool, reconcile: bool, stamp: float):
+    return bu_mod.run(get_data(apply_view=False), _build(top_n, stamp, adjust), dim, scope, model, window, top_n, reconcile)
+
+
+dims = bu_mod.available_dims(df_all)
+c1, c2, c3 = st.columns([2, 2, 2])
+dim = c1.selectbox("Group by", dims, format_func=lambda d: bu_mod.DIMS[d], help="The field the cloud bill is cut by. Each group is forecast on its own; they add up to the provider total.")
+st.caption(bu_mod.DIM_HELP[dim])
+model = c2.selectbox("Model", ["Auto"] + models_mod.MODELS, help="Auto = backtest picks per group (the original behaviour). Pick one to apply it to every group.")
+wlabel = c3.selectbox("Training window", list(bu_mod.WINDOWS), help="How many billed months each group's model learns from. Longer windows include GCP's launch ramp "
+                                                                      "(Nov 2025 – Jan 2026), which can inflate its trend: check the leaderboard.")
+window = bu_mod.WINDOWS[wlabel]
+st.caption(models_mod.HELP[model])
+reconcile = st.checkbox("Reconcile to top-down", value=False,
+                        help="Scale every group by one factor so the groups add up to the top-down Base forecast (each group keeps its share). "
+                             "Use it when the raw bottom-up sits well above or below the provider-level forecast.")
+if model in models_mod.SEASONAL and 0 < window < models_mod.MIN_TRAIN[model]:
+    st.warning(f"{model} needs {models_mod.MIN_TRAIN[model]}+ active months: with a {wlabel.lower()} window every group falls back to Auto. Choose a longer window.")
+
+tabs = st.tabs(["AWS accounts" if dim == "account" else "AWS", "GCP projects" if dim == "account" else "GCP", "AWS + GCP"])
+for tab, scope in zip(tabs, bu_mod.SCOPES):
     with tab:
-        t = ny.tables[p]
-        fyc = f"FY{fy} forecast"
-        st.markdown(nys.account_text(ny, sm, p))
-        show(ch.accounts_share(t, ny, p), width="stretch")
-        st.dataframe(nys.account_display(ny, p), width="stretch")
-        st.download_button("Download CSV", t.round(2).to_csv().encode(), f"{p}_FY{fy}_forecast_by_line.csv", "text/csv", key=f"dl_{p}")
-        with st.expander("Small multiples — every line, actual vs forecast"):
-            show(ch.small_multiples(ny, p), width="stretch")
-        with st.expander("Services inside one account / project"):
-            pick = st.selectbox("Choose", [x for x in t.index if not x.startswith("All other")], key=f"pick_{p}")
-            st.dataframe(ny_mod.account_services(df_all, ny, p, pick).style.format(
-                {"Last 12 mo": money, "Exit run-rate /mo": money, fyc: money}), width="stretch")
+        bu = _bottom_up(dim, scope, model, window, top_n, adjust, reconcile, float(len(df_all)))
+        if bu.table is None or bu.table.empty:
+            st.info("No spend in this scope.")
+            continue
+        k = f"{scope}_{dim}"
+        st.markdown(nys.bu_text(bu))
+        for t_ in bu.notes:
+            st.caption(f"ℹ️ {t_}")
+        show(ch.accounts_share(bu.table, ny, scope), width="stretch")
+        st.dataframe(nys.bu_display(bu), width="stretch")
+        notes = sorted({lf.note for lf in bu.lines if lf.note})
+        if notes:
+            st.caption("† " + " · ".join(notes))
+        st.download_button("Download CSV", bu.table.round(2).to_csv().encode(), f"{scope.replace(' + ', '_')}_FY{fy}_by_{dim}.csv", "text/csv", key=f"dl_{k}")
+        with st.expander("Which model fits best? Backtest leaderboard"):
+            v = nys.model_verdict(bu)
+            if v:
+                st.markdown(v)
+            st.dataframe(nys.board_display(bu), width="stretch")
+            st.caption("Seasonal models are tested only when enough history exists (18+ active months; Holt-Winters 24+ and 4 test months). "
+                       "A blank means that model could not be tested for that group.")
+        with st.expander("Small multiples — every group, actual vs forecast"):
+            show(ch.small_multiples(ny, scope, lines=bu.lines), width="stretch")
+        with st.expander("What is inside one group?"):
+            pick = st.selectbox("Group", [x for x in bu.table.index if not x.startswith("All other")], key=f"pick_{k}")
+            by = st.radio("Break it down by", ["Cloud services", "Accounts / projects"], horizontal=True, key=f"by_{k}")
+            inner = bu_mod.drill(df_all, ny, bu, pick, "account" if by.startswith("Accounts") else "service")
+            if inner.empty:
+                st.info("Nothing to show.")
+            else:
+                st.dataframe(inner.style.format({"Last 12 mo": money, "Exit run-rate /mo": money, f"FY{fy} forecast": money}), width="stretch")
 
 st.markdown("**Top-down vs bottom-up reconciliation**")
 show(ch.reconciliation(ny, budgets), width="stretch")
