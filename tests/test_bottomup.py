@@ -287,4 +287,8 @@ def test_month_to_date_chart_uses_three_distinct_colours_and_readable_hover(bill
     colors = [t.marker.color for t in bars]
     assert len(bars) == 3 and len(set(colors)) == 3 and all(isinstance(c, str) for c in colors)         # one colour per bar series, so the legend matches the bars
     assert "#94a3b8" not in colors                                                                          # the old grey
-    assert fig.layout.hoverlabel.bgcolor == "#ffffff" and fig.layout.hovermode == "x unified"
+    assert fig.layout.hoverlabel.bgcolor == "#1E293B" and fig.layout.hoverlabel.font.color == "#ffffff"
+    for t in fig.data:                                                                                       # one complete, plain tooltip; no coloured trace-name box
+        assert t.hovertemplate == "%{customdata}<extra></extra>"
+    tip = bars[2].customdata[0]
+    assert all(w in tip for w in ("full month", "so far", "projected", "Range", "Budget")) and "over" in tip or "under" in tip
